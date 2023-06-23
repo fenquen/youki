@@ -303,6 +303,12 @@ impl Syscall for LinuxSyscall {
         Ok(())
     }
 
+    fn chroot(&self, path: &Path) -> Result<()> {
+        unistd::chroot(path)?;
+
+        Ok(())
+    }
+
     /// Set namespace for process
     fn set_ns(&self, rawfd: i32, nstype: CloneFlags) -> Result<()> {
         nix::sched::setns(rawfd, nstype)?;
@@ -345,7 +351,6 @@ impl Syscall for LinuxSyscall {
         })?;
         Ok(())
     }
-
     /// Disassociate parts of execution context
     // see https://man7.org/linux/man-pages/man2/unshare.2.html for more information
     fn unshare(&self, flags: CloneFlags) -> Result<()> {
@@ -353,6 +358,7 @@ impl Syscall for LinuxSyscall {
 
         Ok(())
     }
+
     /// Set capabilities for container process
     fn set_capability(&self, cset: CapSet, value: &CapsHashSet) -> Result<()> {
         match cset {
@@ -451,12 +457,6 @@ impl Syscall for LinuxSyscall {
 
         let user = unsafe { Self::passwd_to_user(result.read()) };
         Some(user)
-    }
-
-    fn chroot(&self, path: &Path) -> Result<()> {
-        unistd::chroot(path)?;
-
-        Ok(())
     }
 
     fn mount(
