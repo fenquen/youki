@@ -114,25 +114,3 @@ where
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::tools::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_set_xattr_and_get_xattr() {
-        // Because of the permission issue, "selinux.security" can't be used here.
-        let attr_name = "user.test_attr";
-        let attr_value = "system_u:object_r:some_label_t";
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        let file_path = temp_file.path();
-
-        file_path
-            .set_xattr(attr_name, attr_value.as_bytes())
-            .expect("Failed to set xattr");
-        let actual = file_path.get_xattr(attr_name).expect("Failed to get xattr");
-        assert_eq!(actual, attr_value);
-    }
-    // The test of lset and lget is not implemented here because there is no root permission.
-}

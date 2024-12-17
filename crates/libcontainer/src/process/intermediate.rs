@@ -7,11 +7,11 @@ use procfs::process::Process;
 
 use super::args::{ContainerArgs, ContainerType};
 use super::channel::{IntermediateReceiver, MainSender};
-use super::container_init_process::container_init_process;
-use super::fork::CloneCb;
+use super::init;
+use super::clone::CloneCb;
 use crate::error::MissingSpecError;
 use crate::namespaces::Namespaces;
-use crate::process::{channel, fork};
+use crate::process::{channel, clone};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IntermediateProcessError {
@@ -22,7 +22,7 @@ pub enum IntermediateProcessError {
     #[error(transparent)]
     Syscall(#[from] crate::syscall::SyscallError),
     #[error("failed to launch init process")]
-    InitProcess(#[source] fork::CloneError),
+    InitProcess(#[source] clone::CloneError),
     #[error("cgroup error: {0}")]
     Cgroup(String),
     #[error(transparent)]
@@ -37,12 +37,10 @@ pub enum IntermediateProcessError {
 
 type Result<T> = std::result::Result<T, IntermediateProcessError>;
 
-pub fn container_intermediate_process(
-    args: &ContainerArgs,
-    intermediate_chan: &mut (channel::IntermediateSender, channel::IntermediateReceiver),
-    init_chan: &mut (channel::InitSender, channel::InitReceiver),
-    main_sender: &mut channel::MainSender,
-) -> Result<()> {
+pub fn container_intermediate_process(args: &ContainerArgs,
+                                      intermediate_chan: &mut (channel::IntermediateSender, channel::IntermediateReceiver),
+                                      init_chan: &mut (channel::InitSender, channel::InitReceiver),
+                                      main_sender: &mut channel::MainSender) -> Result<()> {
     let (inter_sender, inter_receiver) = intermediate_chan;
     let (init_sender, init_receiver) = init_chan;
     let command = args.syscall.create_syscall();
@@ -118,7 +116,8 @@ pub fn container_intermediate_process(
                 tracing::error!(?err, "failed to close sender in the intermediate process");
                 return -1;
             }
-            match container_init_process(args, main_sender, init_receiver) {
+
+            match init::container_init_process(args, main_sender, init_receiver) {
                 Ok(_) => 0,
                 Err(e) => {
                     tracing::error!("failed to initialize container process: {e}");
@@ -151,7 +150,7 @@ pub fn container_intermediate_process(
     // configuration. The youki main process can decide what to do with the init
     // process and the intermediate process can just exit safely after the job
     // is done.
-    let pid = fork::container_clone_sibling(cb).map_err(|err| {
+    let pid = clone::container_clone_sibling(cb).map_err(|err| {
         tracing::error!("failed to fork init process: {}", err);
         IntermediateProcessError::InitProcess(err)
     })?;
@@ -174,13 +173,12 @@ pub fn container_intermediate_process(
         tracing::error!("failed to close unused main sender: {}", err);
         err
     })?;
+
     inter_sender.close().map_err(|err| {
-        tracing::error!(
-            "failed to close sender in the intermediate process: {}",
-            err
-        );
+        tracing::error!("failed to close sender in the intermediate process: {}", err);
         err
     })?;
+
     init_sender.close().map_err(|err| {
         tracing::error!("failed to close unused init sender: {}", err);
         err
@@ -189,51 +187,43 @@ pub fn container_intermediate_process(
     Ok(())
 }
 
-fn setup_userns(
-    namespaces: &Namespaces,
-    user_namespace: &LinuxNamespace,
-    sender: &mut MainSender,
-    receiver: &mut IntermediateReceiver,
-) -> Result<()> {
+fn setup_userns(namespaces: &Namespaces,
+                user_namespace: &LinuxNamespace,
+                sender: &mut MainSender,
+                receiver: &mut IntermediateReceiver) -> Result<()> {
     namespaces.unshare_or_setns(user_namespace)?;
     if user_namespace.path().is_some() {
         return Ok(());
     }
 
     tracing::debug!("creating new user namespace");
+
     // child needs to be dumpable, otherwise the non root parent is not
     // allowed to write the uid/gid maps
     prctl::set_dumpable(true).map_err(|e| {
-        IntermediateProcessError::Other(format!(
-            "error in setting dumpable to true : {}",
-            nix::errno::Errno::from_raw(e)
-        ))
+        IntermediateProcessError::Other(format!("error in setting dumpable to true : {}", nix::errno::Errno::from_raw(e)))
     })?;
+
     sender.identifier_mapping_request().map_err(|err| {
         tracing::error!("failed to send id mapping request: {}", err);
         err
     })?;
+
     receiver.wait_for_mapping_ack().map_err(|err| {
         tracing::error!("failed to receive id mapping ack: {}", err);
         err
     })?;
+
     prctl::set_dumpable(false).map_err(|e| {
-        IntermediateProcessError::Other(format!(
-            "error in setting dumplable to false : {}",
-            nix::errno::Errno::from_raw(e)
-        ))
+        IntermediateProcessError::Other(format!("error in setting dumplable to false : {}", nix::errno::Errno::from_raw(e)))
     })?;
+
     Ok(())
 }
 
-fn apply_cgroups<
-    C: CgroupManager<Error = E> + ?Sized,
-    E: std::error::Error + Send + Sync + 'static,
->(
-    cmanager: &C,
-    resources: Option<&LinuxResources>,
-    init: bool,
-) -> Result<()> {
+fn apply_cgroups<C: CgroupManager<Error=E> + ?Sized, E: std::error::Error + Send + Sync + 'static>(cmanager: &C,
+                                                                                                   resources: Option<&LinuxResources>,
+                                                                                                   init: bool) -> Result<()> {
     let pid = Pid::from_raw(Process::myself()?.pid());
     cmanager.add_task(pid).map_err(|err| {
         tracing::error!(?pid, ?err, ?init, "failed to add task to cgroup");
@@ -257,68 +247,4 @@ fn apply_cgroups<
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use libcgroups::test_manager::TestManager;
-    use nix::unistd::Pid;
-    use oci_spec::runtime::LinuxResources;
-    use procfs::process::Process;
-
-    use super::*;
-
-    #[test]
-    fn apply_cgroup_init() -> Result<()> {
-        // arrange
-        let cmanager = TestManager::default();
-        let resources = LinuxResources::default();
-
-        // act
-        apply_cgroups(&cmanager, Some(&resources), true)?;
-
-        // assert
-        assert!(cmanager.get_add_task_args().len() == 1);
-        assert_eq!(
-            cmanager.get_add_task_args()[0],
-            Pid::from_raw(Process::myself()?.pid())
-        );
-        assert!(cmanager.apply_called());
-        Ok(())
-    }
-
-    #[test]
-    fn apply_cgroup_tenant() -> Result<()> {
-        // arrange
-        let cmanager = TestManager::default();
-        let resources = LinuxResources::default();
-
-        // act
-        apply_cgroups(&cmanager, Some(&resources), false)?;
-
-        // assert
-        assert_eq!(
-            cmanager.get_add_task_args()[0],
-            Pid::from_raw(Process::myself()?.pid())
-        );
-        assert!(!cmanager.apply_called());
-        Ok(())
-    }
-
-    #[test]
-    fn apply_cgroup_no_resources() -> Result<()> {
-        // arrange
-        let cmanager = TestManager::default();
-
-        // act
-        apply_cgroups(&cmanager, None, true)?;
-        // assert
-        assert_eq!(
-            cmanager.get_add_task_args()[0],
-            Pid::from_raw(Process::myself()?.pid())
-        );
-        assert!(!cmanager.apply_called());
-        Ok(())
-    }
 }

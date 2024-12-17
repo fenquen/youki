@@ -13,15 +13,15 @@ use crate::workload::executor::default_executor;
 // can be given impression that is is running on a complete system, but on the system which
 // it is running, it is just another process, and has attributes such as pid, file descriptors, etc.
 // associated with it like any other process.
-pub fn create(args: Create, root_path: PathBuf, systemd_cgroup: bool) -> Result<()> {
-    ContainerBuilder::new(args.container_id.clone(), SyscallType::default())
+pub fn create(create: Create, root_path: PathBuf, systemd_cgroup: bool) -> Result<()> {
+    ContainerBuilder::new(create.container_id.clone(), SyscallType::default())
         .with_executor(default_executor())
-        .with_pid_file(args.pid_file.as_ref())?
-        .with_console_socket(args.console_socket.as_ref())
-        .with_root_path(root_path)?
-        .with_preserved_fds(args.preserve_fds)
+        .with_pid_file(create.pid_file.as_ref())?
+        .with_console_socket(create.console_socket.as_ref())
+        .with_root_path(root_path)? // /run/user/1000/youki
+        .with_preserved_fds(create.preserve_fds)
         .validate_id()?
-        .as_init(&args.bundle)
+        .as_init(&create.bundle)
         .with_systemd(systemd_cgroup)
         .with_detach(true)
         .build()?;

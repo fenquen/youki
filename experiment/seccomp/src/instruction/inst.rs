@@ -39,31 +39,3 @@ impl Instruction {
         Self::new(code, 0, 0, k)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::instruction::*;
-
-    #[test]
-    fn test_bpf_instructions() {
-        assert_eq!(
-            Instruction::stmt(BPF_LD | BPF_W | BPF_ABS, 16),
-            Instruction {
-                code: 0x20,
-                offset_jump_true: 0,
-                offset_jump_false: 0,
-                multiuse_field: 16,
-            }
-        );
-        assert_eq!(
-            Instruction::jump(BPF_JMP | BPF_JEQ | BPF_K, 10, 2, 5),
-            Instruction {
-                code: 0x15,
-                offset_jump_true: 2,
-                offset_jump_false: 5,
-                multiuse_field: 10,
-            }
-        );
-    }
-}

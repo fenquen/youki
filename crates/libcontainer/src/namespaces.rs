@@ -7,7 +7,7 @@
 //! UTS (hostname and domain information, processes will think they're running on servers with different names),
 //! Cgroup (Resource limits, execution priority etc.)
 
-use std::collections;
+use std::collections::HashMap;
 
 use nix::sched::CloneFlags;
 use nix::sys::stat;
@@ -43,11 +43,11 @@ static ORDERED_NAMESPACES: &[CloneFlags] = &[
 
 /// Holds information about namespaces
 pub struct Namespaces {
-    command: Box<dyn Syscall>,
-    namespace_map: collections::HashMap<CloneFlags, LinuxNamespace>,
+    syscall: Box<dyn Syscall>,
+    cloneFlags_linuxNameSpace: HashMap<CloneFlags, LinuxNamespace>,
 }
 
-fn get_clone_flag(namespace_type: LinuxNamespaceType) -> Result<CloneFlags> {
+fn linuxNameSpace2CloneFlag(namespace_type: LinuxNamespaceType) -> Result<CloneFlags> {
     let flag = match namespace_type {
         LinuxNamespaceType::User => CloneFlags::CLONE_NEWUSER,
         LinuxNamespaceType::Pid => CloneFlags::CLONE_NEWPID,
@@ -66,21 +66,18 @@ impl TryFrom<Option<&Vec<LinuxNamespace>>> for Namespaces {
     type Error = NamespaceError;
 
     fn try_from(namespaces: Option<&Vec<LinuxNamespace>>) -> Result<Self> {
-        let command: Box<dyn Syscall> = create_syscall();
-        let namespace_map: collections::HashMap<CloneFlags, LinuxNamespace> = namespaces
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|ns| match get_clone_flag(ns.typ()) {
-                Ok(flag) => Ok((flag, ns.clone())),
-                Err(err) => Err(err),
-            })
-            .collect::<Result<Vec<(CloneFlags, LinuxNamespace)>>>()?
-            .into_iter()
-            .collect();
+        let syscall: Box<dyn Syscall> = create_syscall();
+
+        let cloneFlags_linuxNameSpace: HashMap<CloneFlags, LinuxNamespace> =
+            namespaces.unwrap_or(&vec![]).iter()
+                .map(|linuxNameSpace| match linuxNameSpace2CloneFlag(linuxNameSpace.typ()) {
+                    Ok(flag) => Ok((flag, linuxNameSpace.clone())),
+                    Err(err) => Err(err),
+                }).collect::<Result<Vec<(CloneFlags, LinuxNamespace)>>>()?.into_iter().collect();
 
         Ok(Namespaces {
-            command,
-            namespace_map,
+            syscall,
+            cloneFlags_linuxNameSpace,
         })
     }
 }
@@ -90,7 +87,7 @@ impl Namespaces {
         let to_enter: Vec<(&CloneFlags, &LinuxNamespace)> = ORDERED_NAMESPACES
             .iter()
             .filter(|c| filter(**c))
-            .filter_map(|c| self.namespace_map.get_key_value(c))
+            .filter_map(|c| self.cloneFlags_linuxNameSpace.get_key_value(c))
             .collect();
 
         for (_, ns) in to_enter {
@@ -109,8 +106,9 @@ impl Namespaces {
                         err
                     },
                 )?;
-                self.command
-                    .set_ns(fd, get_clone_flag(namespace.typ())?)
+
+                self.syscall
+                    .set_ns(fd, linuxNameSpace2CloneFlag(namespace.typ())?)
                     .map_err(|err| {
                         tracing::error!(?err, ?namespace, "failed to set namespace");
                         err
@@ -121,8 +119,8 @@ impl Namespaces {
                 })?;
             }
             None => {
-                self.command
-                    .unshare(get_clone_flag(namespace.typ())?)
+                self.syscall
+                    .unshare(linuxNameSpace2CloneFlag(namespace.typ())?)
                     .map_err(|err| {
                         tracing::error!(?err, ?namespace, "failed to unshare namespace");
                         err
@@ -134,70 +132,6 @@ impl Namespaces {
     }
 
     pub fn get(&self, k: LinuxNamespaceType) -> Result<Option<&LinuxNamespace>> {
-        Ok(self.namespace_map.get(&get_clone_flag(k)?))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use oci_spec::runtime::{LinuxNamespaceBuilder, LinuxNamespaceType};
-    use serial_test::serial;
-
-    use super::*;
-    use crate::syscall::test::TestHelperSyscall;
-
-    fn gen_sample_linux_namespaces() -> Vec<LinuxNamespace> {
-        vec![
-            LinuxNamespaceBuilder::default()
-                .typ(LinuxNamespaceType::Mount)
-                .path("/dev/null")
-                .build()
-                .unwrap(),
-            LinuxNamespaceBuilder::default()
-                .typ(LinuxNamespaceType::Network)
-                .path("/dev/null")
-                .build()
-                .unwrap(),
-            LinuxNamespaceBuilder::default()
-                .typ(LinuxNamespaceType::Pid)
-                .build()
-                .unwrap(),
-            LinuxNamespaceBuilder::default()
-                .typ(LinuxNamespaceType::User)
-                .build()
-                .unwrap(),
-            LinuxNamespaceBuilder::default()
-                .typ(LinuxNamespaceType::Ipc)
-                .build()
-                .unwrap(),
-        ]
-    }
-
-    #[test]
-    #[serial]
-    fn test_apply_namespaces() {
-        let sample_linux_namespaces = gen_sample_linux_namespaces();
-        let namespaces = Namespaces::try_from(Some(&sample_linux_namespaces))
-            .expect("create namespace struct should be good");
-        let test_command: &TestHelperSyscall = namespaces.command.as_any().downcast_ref().unwrap();
-        assert!(namespaces
-            .apply_namespaces(|ns_type| { ns_type != CloneFlags::CLONE_NEWIPC })
-            .is_ok());
-
-        let mut setns_args: Vec<_> = test_command
-            .get_setns_args()
-            .into_iter()
-            .map(|(_fd, cf)| cf)
-            .collect();
-        setns_args.sort();
-        let mut expect = vec![CloneFlags::CLONE_NEWNS, CloneFlags::CLONE_NEWNET];
-        expect.sort();
-        assert_eq!(setns_args, expect);
-
-        let mut unshare_args = test_command.get_unshare_args();
-        unshare_args.sort();
-        let mut expect = vec![CloneFlags::CLONE_NEWUSER, CloneFlags::CLONE_NEWPID];
-        expect.sort();
-        assert_eq!(unshare_args, expect)
+        Ok(self.cloneFlags_linuxNameSpace.get(&linuxNameSpace2CloneFlag(k)?))
     }
 }

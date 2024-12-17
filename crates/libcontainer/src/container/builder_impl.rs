@@ -15,7 +15,7 @@ use crate::process::args::{ContainerArgs, ContainerType};
 use crate::process::intel_rdt::delete_resctrl_subdirectory;
 use crate::process::{self};
 use crate::syscall::syscall::SyscallType;
-use crate::user_ns::UserNamespaceConfig;
+use crate::user_ns::UserNsCfg;
 use crate::workload::Executor;
 use crate::{hooks, utils};
 
@@ -38,7 +38,7 @@ pub(super) struct ContainerBuilderImpl {
     /// Socket to communicate the file descriptor of the ptty
     pub console_socket: Option<RawFd>,
     /// Options for new user namespace
-    pub user_ns_config: Option<UserNamespaceConfig>,
+    pub user_ns_config: Option<UserNsCfg>,
     /// Path to the Unix Domain Socket to communicate container start
     pub notify_path: PathBuf,
     /// Container state
@@ -56,8 +56,7 @@ impl ContainerBuilderImpl {
         match self.run_container() {
             Ok(pid) => Ok(pid),
             Err(outer) => {
-                // Only the init container should be cleaned up in the case of
-                // an error.
+                // Only the init container should be cleaned up in the case of an error
                 if matches!(self.container_type, ContainerType::InitContainer) {
                     self.cleanup_container()?;
                 }
@@ -75,11 +74,8 @@ impl ContainerBuilderImpl {
             systemd_cgroup: self.use_systemd || self.user_ns_config.is_some(),
             container_name: self.container_id.to_owned(),
         };
-        let process = self
-            .spec
-            .process()
-            .as_ref()
-            .ok_or(MissingSpecError::Process)?;
+
+        let process = self.spec.process().as_ref().ok_or(MissingSpecError::Process)?;
 
         if matches!(self.container_type, ContainerType::InitContainer) {
             if let Some(hooks) = self.spec.hooks() {
@@ -110,15 +106,16 @@ impl ContainerBuilderImpl {
         // fork(2) so this will always be propagated properly.
         if let Some(oom_score_adj) = process.oom_score_adj() {
             tracing::debug!("Set OOM score to {}", oom_score_adj);
+
             let mut f = fs::File::create("/proc/self/oom_score_adj").map_err(|err| {
                 tracing::error!("failed to open /proc/self/oom_score_adj: {}", err);
                 LibcontainerError::OtherIO(err)
             })?;
-            f.write_all(oom_score_adj.to_string().as_bytes())
-                .map_err(|err| {
-                    tracing::error!("failed to write to /proc/self/oom_score_adj: {}", err);
-                    LibcontainerError::OtherIO(err)
-                })?;
+
+            f.write_all(oom_score_adj.to_string().as_bytes()).map_err(|err| {
+                tracing::error!("failed to write to /proc/self/oom_score_adj: {}", err);
+                LibcontainerError::OtherIO(err)
+            })?;
         }
 
         // Make the process non-dumpable, to avoid various race conditions that
@@ -131,10 +128,7 @@ impl ContainerBuilderImpl {
         // containers), which is the recommendation from the kernel folks.
         if linux.namespaces().is_some() {
             prctl::set_dumpable(false).map_err(|e| {
-                LibcontainerError::Other(format!(
-                    "error in setting dumpable to false : {}",
-                    nix::errno::Errno::from_raw(e)
-                ))
+                LibcontainerError::Other(format!("error in setting dumpable to false : {}", nix::errno::Errno::from_raw(e)))
             })?;
         }
 
@@ -157,7 +151,7 @@ impl ContainerBuilderImpl {
         };
 
         let (init_pid, need_to_clean_up_intel_rdt_dir) =
-            process::container_main_process::container_main_process(&container_args).map_err(
+            process::container_main_proc::container_main_process(&container_args).map_err(
                 |err| {
                     tracing::error!("failed to run container process {}", err);
                     LibcontainerError::MainProcess(err)
@@ -179,7 +173,7 @@ impl ContainerBuilderImpl {
                 .set_creator(nix::unistd::geteuid().as_raw())
                 .set_pid(init_pid.as_raw())
                 .set_clean_up_intel_rdt_directory(need_to_clean_up_intel_rdt_dir)
-                .save()?;
+                .saveState2File()?;
         }
 
         Ok(init_pid)
@@ -210,9 +204,9 @@ impl ContainerBuilderImpl {
                 }
             }
 
-            if container.root.exists() {
-                if let Err(e) = fs::remove_dir_all(&container.root) {
-                    tracing::error!(container_root = ?container.root, error = ?e, "failed to delete container root");
+            if container.rootPath.exists() {
+                if let Err(e) = fs::remove_dir_all(&container.rootPath) {
+                    tracing::error!(container_root = ?container.rootPath, error = ?e, "failed to delete container root");
                     errors.push(e.to_string());
                 }
             }

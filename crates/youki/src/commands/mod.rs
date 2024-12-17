@@ -59,7 +59,7 @@ fn create_cgroup_manager<P: AsRef<Path>>(
     let container = load_container(root_path, container_id)?;
     Ok(libcgroups::common::create_cgroup_manager(
         libcgroups::common::CgroupConfig {
-            cgroup_path: container.spec()?.cgroup_path,
+            cgroup_path: container.spec()?.cgroupPath,
             systemd_cgroup: container.systemd(),
             container_name: container.id().to_string(),
         },

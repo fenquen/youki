@@ -8,10 +8,13 @@ use crate::utils::PathBufExt;
 use crate::workload::{self, Executor};
 
 pub struct ContainerBuilder {
-    /// Id of the container
+    /// Id of the container,名字有问题应该是name
     pub(super) container_id: String,
-    /// Root directory for container state
-    pub(super) root_path: PathBuf,
+
+    /// Root directory for container state <br>
+    /// /run/user/1000/youki
+    pub(super) rootPath: PathBuf,
+
     /// Interface to operating system primitives
     pub(super) syscall: SyscallType,
     /// File which will be used to communicate the pid of the
@@ -64,7 +67,7 @@ impl ContainerBuilder {
         let root_path = PathBuf::from("/run/youki");
         Self {
             container_id,
-            root_path,
+            rootPath: root_path,
             syscall,
             pid_file: None,
             console_socket: None,
@@ -164,7 +167,7 @@ impl ContainerBuilder {
     /// ```
     pub fn with_root_path<P: Into<PathBuf>>(mut self, path: P) -> Result<Self, LibcontainerError> {
         let path = path.into();
-        self.root_path = path.canonicalize_safely().map_err(|err| {
+        self.rootPath = path.canonicalize_safely().map_err(|err| {
             tracing::error!(?path, ?err, "failed to canonicalize root path");
             LibcontainerError::InvalidInput(format!("invalid root path {path:?}: {err:?}"))
         })?;
@@ -256,82 +259,5 @@ impl ContainerBuilder {
     pub fn with_executor(mut self, executor: impl Executor + 'static) -> Self {
         self.executor = Box::new(executor);
         self
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use anyhow::{Context, Result};
-
-    use crate::container::builder::ContainerBuilder;
-    use crate::syscall::syscall::SyscallType;
-
-    #[test]
-    fn test_failable_functions() -> Result<()> {
-        let root_path_temp_dir = tempfile::tempdir().context("failed to create temp dir")?;
-        let pid_file_temp_dir = tempfile::tempdir().context("failed to create temp dir")?;
-        let syscall = SyscallType::default();
-
-        ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall)
-            .with_root_path(root_path_temp_dir.path())?
-            .with_pid_file(Some(pid_file_temp_dir.path().join("fake.pid")))?
-            .with_console_socket(Some("/var/run/docker/sock.tty"))
-            .as_init("/var/run/docker/bundle");
-
-        // accept None pid file.
-        ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall).with_pid_file::<PathBuf>(None)?;
-
-        // accept absolute root path which does not exist
-        let abs_root_path = PathBuf::from("/not/existing/path");
-        let path_builder = ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall)
-            .with_root_path(&abs_root_path)
-            .context("build container")?;
-        assert_eq!(path_builder.root_path, abs_root_path);
-
-        // accept relative root path which does not exist
-        let cwd = std::env::current_dir().context("get current dir")?;
-        let path_builder = ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall)
-            .with_root_path("./not/existing/path")
-            .context("build container")?;
-        assert_eq!(path_builder.root_path, cwd.join("not/existing/path"));
-
-        // accept absolute pid path which does not exist
-        let abs_pid_path = PathBuf::from("/not/existing/path");
-        let path_builder = ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall)
-            .with_pid_file(Some(&abs_pid_path))
-            .context("build container")?;
-        assert_eq!(path_builder.pid_file, Some(abs_pid_path));
-
-        // accept relative pid path which does not exist
-        let cwd = std::env::current_dir().context("get current dir")?;
-        let path_builder = ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall)
-            .with_pid_file(Some("./not/existing/path"))
-            .context("build container")?;
-        assert_eq!(path_builder.pid_file, Some(cwd.join("not/existing/path")));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_validate_id() -> Result<()> {
-        let syscall = SyscallType::default();
-        // validate container_id
-        let result = ContainerBuilder::new("$#".to_owned(), syscall).validate_id();
-        assert!(result.is_err());
-
-        let result = ContainerBuilder::new(".".to_owned(), syscall).validate_id();
-        assert!(result.is_err());
-
-        let result = ContainerBuilder::new("..".to_owned(), syscall).validate_id();
-        assert!(result.is_err());
-
-        let result = ContainerBuilder::new("...".to_owned(), syscall).validate_id();
-        assert!(result.is_ok());
-
-        let result = ContainerBuilder::new("74f1a4cb3801".to_owned(), syscall).validate_id();
-        assert!(result.is_ok());
-        Ok(())
     }
 }

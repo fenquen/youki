@@ -26,7 +26,7 @@ use crate::container::builder_impl::ContainerBuilderImpl;
 use crate::error::{ErrInvalidSpec, LibcontainerError, MissingSpecError};
 use crate::notify_socket::NotifySocket;
 use crate::process::args::ContainerType;
-use crate::user_ns::UserNamespaceConfig;
+use crate::user_ns::UserNsCfg;
 use crate::{tty, utils};
 
 const NAMESPACE_TYPES: &[&str] = &["ipc", "uts", "net", "pid", "mnt", "cgroup"];
@@ -120,7 +120,7 @@ impl TenantContainerBuilder {
         let csocketfd = self.setup_tty_socket(&container_dir)?;
 
         let use_systemd = self.should_use_systemd(&container);
-        let user_ns_config = UserNamespaceConfig::new(&spec)?;
+        let user_ns_config = UserNsCfg::new(&spec)?;
 
         let (read_end, write_end) =
             pipe2(OFlag::O_CLOEXEC).map_err(LibcontainerError::OtherSyscall)?;
@@ -179,7 +179,7 @@ impl TenantContainerBuilder {
     }
 
     fn lookup_container_dir(&self) -> Result<PathBuf, LibcontainerError> {
-        let container_dir = self.base.root_path.join(&self.base.container_id);
+        let container_dir = self.base.rootPath.join(&self.base.container_id);
         if !container_dir.exists() {
             tracing::error!(?container_dir, ?self.base.container_id, "container dir does not exist");
             return Err(LibcontainerError::NoDirectory);
@@ -287,7 +287,7 @@ impl TenantContainerBuilder {
             }
         }
 
-        utils::validate_spec_for_new_user_ns(spec)?;
+        utils::validateSpecForNewUserNs(spec)?;
 
         Ok(())
     }

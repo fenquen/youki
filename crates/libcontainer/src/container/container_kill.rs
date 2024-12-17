@@ -41,7 +41,7 @@ impl Container {
                 return Err(LibcontainerError::IncorrectStatus);
             }
         }
-        self.set_status(ContainerStatus::Stopped).save()?;
+        self.set_status(ContainerStatus::Stopped).saveState2File()?;
         Ok(())
     }
 
@@ -84,7 +84,7 @@ impl Container {
                 | libcgroups::common::CgroupSetup::Hybrid => {
                     let cmanager = libcgroups::common::create_cgroup_manager(
                         libcgroups::common::CgroupConfig {
-                            cgroup_path: self.spec()?.cgroup_path,
+                            cgroup_path: self.spec()?.cgroupPath,
                             systemd_cgroup: self.systemd(),
                             container_name: self.id().to_string(),
                         },
@@ -101,7 +101,7 @@ impl Container {
         let signal = signal.into().into_raw();
         let cmanager =
             libcgroups::common::create_cgroup_manager(libcgroups::common::CgroupConfig {
-                cgroup_path: self.spec()?.cgroup_path,
+                cgroup_path: self.spec()?.cgroupPath,
                 systemd_cgroup: self.systemd(),
                 container_name: self.id().to_string(),
             })?;

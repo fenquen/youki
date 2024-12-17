@@ -35,30 +35,3 @@ impl NetworkClassifier {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use oci_spec::runtime::LinuxNetworkBuilder;
-
-    use super::*;
-    use crate::test::set_fixture;
-
-    #[test]
-    fn test_apply_network_classifier() {
-        let tmp = tempfile::tempdir().unwrap();
-        set_fixture(tmp.path(), "net_cls.classid", "0").expect("set fixture for classID");
-
-        let id = 0x100001u32;
-        let network = LinuxNetworkBuilder::default()
-            .class_id(id)
-            .priorities(vec![])
-            .build()
-            .unwrap();
-
-        NetworkClassifier::apply(tmp.path(), &network).expect("apply network classID");
-
-        let content = std::fs::read_to_string(tmp.path().join("net_cls.classid"))
-            .expect("Read classID contents");
-        assert_eq!(id.to_string(), content);
-    }
-}

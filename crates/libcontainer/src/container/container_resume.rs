@@ -35,7 +35,7 @@ impl Container {
 
         let cmanager =
             libcgroups::common::create_cgroup_manager(libcgroups::common::CgroupConfig {
-                cgroup_path: self.spec()?.cgroup_path,
+                cgroup_path: self.spec()?.cgroupPath,
                 systemd_cgroup: self.systemd(),
                 container_name: self.id().to_string(),
             })?;
@@ -43,7 +43,7 @@ impl Container {
         cmanager.freeze(FreezerState::Thawed)?;
 
         tracing::debug!("saving running status");
-        self.set_status(ContainerStatus::Running).save()?;
+        self.set_status(ContainerStatus::Running).saveState2File()?;
 
         tracing::debug!("container {} resumed", self.id());
         Ok(())

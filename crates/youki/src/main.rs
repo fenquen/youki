@@ -1,6 +1,7 @@
 //! # Youki
 //! Container Runtime written in Rust, inspired by [railcar](https://github.com/oracle/railcar)
 //! This crate provides a container runtime which can be used by a high-level container runtime to run containers.
+#![allow(non_snake_case)]
 mod commands;
 mod observability;
 mod rootpath;
@@ -18,6 +19,7 @@ struct YoukiExtendOpts {
     /// Enable logging to systemd-journald
     #[clap(long)]
     pub systemd_log: bool,
+
     /// set the log level (default is 'error')
     #[clap(long)]
     pub log_level: Option<String>,
@@ -62,12 +64,14 @@ struct Opts {
 enum SubCommand {
     // Standard and common commands handled by the liboci_cli crate
     #[clap(flatten)]
-    Standard(Box<liboci_cli::StandardCmd>),
+    Standard(Box<StandardCmd>),
+
     #[clap(flatten)]
-    Common(Box<liboci_cli::CommonCmd>),
+    Common(Box<CommonCmd>),
 
     // Youki specific extensions
     Info(info::Info),
+
     Completion(commands::completion::Completion),
 }
 
@@ -79,12 +83,16 @@ fn main() -> Result<()> {
     // in runc and was assigned as CVE-2019-5736, but it also affects youki.
     //
     // The fix is to copy /proc/self/exe in an anonymous file descriptor (created via memfd_create),
-    // seal it and re-execute it. Because the final step is re-execution, this needs to be done at
-    // the beginning of this process.
+    // seal it and re-execute it. Because the final step is re-execution, this needs to be done at the beginning of this process.
     //
     // Ref: https://github.com/opencontainers/runc/commit/0a8e4117e7f715d5fbeef398405813ce8e88558b
     // Ref: https://github.com/lxc/lxc/commit/6400238d08cdf1ca20d49bafb85f4e224348bf9d
-    pentacle::ensure_sealed().context("failed to seal /proc/self/exe")?;
+    // 防止恶意程序对可执行文件的篡改,会使得debug由源码变为disassemble
+    // 它的原理
+    // mem文件系统生成1个fd(memfd_create)
+    // 可执文件copy到该fd
+    // 对该fd调用 fcntl + F_ADD_SEALS 设置 F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE 不允许变动文件的
+    //pentacle::ensure_sealed().context("failed to seal /proc/self/exe")?;
 
     let opts = Opts::parse();
     let mut app = Opts::command();
@@ -94,30 +102,29 @@ fn main() -> Result<()> {
         err
     })?;
 
-    tracing::debug!(
-        "started by user {} with {:?}",
-        nix::unistd::geteuid(),
-        std::env::args_os()
-    );
-    let root_path = rootpath::determine(opts.global.root)?;
+    tracing::debug!("started by user {} with {:?}", nix::unistd::geteuid(), std::env::args_os());
+
+    // 不是root /run/user/当前用户的id/youki
+    // root: /run/youki
+    let rootPath = rootpath::determine(opts.global.root)?;
     let systemd_cgroup = opts.global.systemd_cgroup;
 
     let cmd_result = match opts.subcmd {
         SubCommand::Standard(cmd) => match *cmd {
             StandardCmd::Create(create) => {
-                commands::create::create(create, root_path, systemd_cgroup)
+                commands::create::create(create, rootPath, systemd_cgroup)
             }
-            StandardCmd::Start(start) => commands::start::start(start, root_path),
-            StandardCmd::Kill(kill) => commands::kill::kill(kill, root_path),
-            StandardCmd::Delete(delete) => commands::delete::delete(delete, root_path),
-            StandardCmd::State(state) => commands::state::state(state, root_path),
+            StandardCmd::Start(start) => commands::start::start(start, rootPath),
+            StandardCmd::Kill(kill) => commands::kill::kill(kill, rootPath),
+            StandardCmd::Delete(delete) => commands::delete::delete(delete, rootPath),
+            StandardCmd::State(state) => commands::state::state(state, rootPath),
         },
         SubCommand::Common(cmd) => match *cmd {
             CommonCmd::Checkpointt(checkpoint) => {
-                commands::checkpoint::checkpoint(checkpoint, root_path)
+                commands::checkpoint::checkpoint(checkpoint, rootPath)
             }
-            CommonCmd::Events(events) => commands::events::events(events, root_path),
-            CommonCmd::Exec(exec) => match commands::exec::exec(exec, root_path) {
+            CommonCmd::Events(events) => commands::events::events(events, rootPath),
+            CommonCmd::Exec(exec) => match commands::exec::exec(exec, rootPath) {
                 Ok(exit_code) => std::process::exit(exit_code),
                 Err(e) => {
                     tracing::error!("error in executing command: {:?}", e);
@@ -126,11 +133,11 @@ fn main() -> Result<()> {
                 }
             },
             CommonCmd::Features(features) => commands::features::features(features),
-            CommonCmd::List(list) => commands::list::list(list, root_path),
-            CommonCmd::Pause(pause) => commands::pause::pause(pause, root_path),
-            CommonCmd::Ps(ps) => commands::ps::ps(ps, root_path),
-            CommonCmd::Resume(resume) => commands::resume::resume(resume, root_path),
-            CommonCmd::Run(run) => match commands::run::run(run, root_path, systemd_cgroup) {
+            CommonCmd::List(list) => commands::list::list(list, rootPath),
+            CommonCmd::Pause(pause) => commands::pause::pause(pause, rootPath),
+            CommonCmd::Ps(ps) => commands::ps::ps(ps, rootPath),
+            CommonCmd::Resume(resume) => commands::resume::resume(resume, rootPath),
+            CommonCmd::Run(run) => match commands::run::run(run, rootPath, systemd_cgroup) {
                 Ok(exit_code) => std::process::exit(exit_code),
                 Err(e) => {
                     tracing::error!("error in executing command: {:?}", e);
@@ -139,7 +146,7 @@ fn main() -> Result<()> {
                 }
             },
             CommonCmd::Spec(spec) => commands::spec_json::spec(spec),
-            CommonCmd::Update(update) => commands::update::update(update, root_path),
+            CommonCmd::Update(update) => commands::update::update(update, rootPath),
         },
 
         SubCommand::Info(info) => commands::info::info(info),
@@ -152,5 +159,6 @@ fn main() -> Result<()> {
         tracing::error!("error in executing command: {:?}", e);
         eprintln!("error in executing command: {:?}", e);
     }
+
     cmd_result
 }

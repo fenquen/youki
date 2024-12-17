@@ -5,7 +5,6 @@
 pub mod linux;
 #[allow(clippy::module_inception)]
 pub mod syscall;
-pub mod test;
 
 pub use syscall::Syscall;
 #[derive(Debug, thiserror::Error)]

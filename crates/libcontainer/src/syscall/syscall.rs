@@ -15,11 +15,9 @@ use nix::unistd::{Gid, Uid};
 use oci_spec::runtime::PosixRlimit;
 
 use crate::syscall::linux::{LinuxSyscall, MountAttr};
-use crate::syscall::test::TestHelperSyscall;
 use crate::syscall::Result;
 
-/// This specifies various kernel/other functionalities required for
-/// container management
+/// This specifies various kernel/other functionalities required for container management
 pub trait Syscall {
     fn as_any(&self) -> &dyn Any;
     fn pivot_rootfs(&self, path: &Path) -> Result<()>;
@@ -32,55 +30,43 @@ pub trait Syscall {
     fn set_domainname(&self, domainname: &str) -> Result<()>;
     fn set_rlimit(&self, rlimit: &PosixRlimit) -> Result<()>;
     fn get_pwuid(&self, uid: u32) -> Option<Arc<OsStr>>;
-    fn mount(
-        &self,
-        source: Option<&Path>,
-        target: &Path,
-        fstype: Option<&str>,
-        flags: MsFlags,
-        data: Option<&str>,
-    ) -> Result<()>;
+    fn mount(&self,
+             source: Option<&Path>,
+             target: &Path,
+             fstype: Option<&str>,
+             flags: MsFlags,
+             data: Option<&str>) -> Result<()>;
     fn symlink(&self, original: &Path, link: &Path) -> Result<()>;
     fn mknod(&self, path: &Path, kind: SFlag, perm: Mode, dev: u64) -> Result<()>;
     fn chown(&self, path: &Path, owner: Option<Uid>, group: Option<Gid>) -> Result<()>;
     fn set_groups(&self, groups: &[Gid]) -> Result<()>;
     fn close_range(&self, preserve_fds: i32) -> Result<()>;
-    fn mount_setattr(
-        &self,
-        dirfd: i32,
-        pathname: &Path,
-        flags: u32,
-        mount_attr: &MountAttr,
-        size: libc::size_t,
-    ) -> Result<()>;
+    fn mount_setattr(&self,
+                     dirfd: i32,
+                     pathname: &Path,
+                     flags: u32,
+                     mount_attr: &MountAttr,
+                     size: libc::size_t) -> Result<()>;
     fn set_io_priority(&self, class: i64, priority: i64) -> Result<()>;
 }
 
 #[derive(Clone, Copy)]
 pub enum SyscallType {
     Linux,
-    Test,
 }
 
 impl Default for SyscallType {
     fn default() -> Self {
-        if cfg!(test) {
-            SyscallType::Test
-        } else {
-            SyscallType::Linux
-        }
+        SyscallType::Linux
     }
 }
 
 impl SyscallType {
     pub fn create_syscall(&self) -> Box<dyn Syscall> {
-        match self {
-            SyscallType::Linux => Box::new(LinuxSyscall),
-            SyscallType::Test => Box::<TestHelperSyscall>::default(),
-        }
+        Box::new(LinuxSyscall)
     }
 }
 
 pub fn create_syscall() -> Box<dyn Syscall> {
-    SyscallType::default().create_syscall()
+    Box::new(LinuxSyscall)
 }

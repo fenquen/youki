@@ -8,7 +8,7 @@ use oci_spec::runtime::Spec;
 use crate::container::Container;
 use crate::notify_socket::NotifyListener;
 use crate::syscall::syscall::SyscallType;
-use crate::user_ns::UserNamespaceConfig;
+use crate::user_ns::UserNsCfg;
 use crate::workload::Executor;
 #[derive(Debug, Copy, Clone)]
 pub enum ContainerType {
@@ -35,7 +35,7 @@ pub struct ContainerArgs {
     /// Container state
     pub container: Option<Container>,
     /// Options for new namespace creation
-    pub user_ns_config: Option<UserNamespaceConfig>,
+    pub user_ns_config: Option<UserNsCfg>,
     /// Cgroup Manager Config
     pub cgroup_config: CgroupConfig,
     /// If the container is to be run in detached mode

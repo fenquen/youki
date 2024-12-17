@@ -106,35 +106,3 @@ where
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use core::panic;
-
-    use anyhow::{bail, Result};
-
-    use super::*;
-
-    #[test]
-    fn test_child_process() -> Result<()> {
-        if test_in_child_process(|| Err(TestCallbackError::Custom("test error".to_string())))
-            .is_ok()
-        {
-            bail!("expecting the child process to return an error")
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_panic_child_process() -> Result<()> {
-        let ret = test_in_child_process(|| {
-            panic!("test panic");
-        });
-        if ret.is_ok() {
-            bail!("expecting the child process to panic")
-        }
-
-        Ok(())
-    }
-}

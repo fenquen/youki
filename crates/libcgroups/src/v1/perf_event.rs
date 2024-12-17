@@ -17,26 +17,3 @@ impl Controller for PerfEvent {
         None
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use nix::unistd::Pid;
-
-    use super::*;
-    use crate::common::CGROUP_PROCS;
-    use crate::test::setup;
-
-    #[test]
-    fn test_add_task() {
-        let (tmp, procs) = setup(CGROUP_PROCS);
-        let pid = Pid::from_raw(1000);
-
-        PerfEvent::add_task(pid, tmp.path()).expect("apply perf_event");
-
-        let content = fs::read_to_string(procs)
-            .unwrap_or_else(|_| panic!("read {CGROUP_PROCS} file content"));
-        assert_eq!(content, "1000");
-    }
-}

@@ -3,21 +3,21 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use oci_spec::runtime::Spec;
-use user_ns::UserNamespaceConfig;
+use user_ns::UserNsCfg;
 
 use super::builder::ContainerBuilder;
 use super::builder_impl::ContainerBuilderImpl;
 use super::{Container, ContainerStatus};
 use crate::config::YoukiConfig;
 use crate::error::{ErrInvalidSpec, LibcontainerError, MissingSpecError};
-use crate::notify_socket::NOTIFY_FILE;
+use crate::notify_socket::NOTIFY_SOCK_FILE_NAME;
 use crate::process::args::ContainerType;
 use crate::{apparmor, tty, user_ns, utils};
 
 // Builder that can be used to configure the properties of a new container
 pub struct InitContainerBuilder {
-    base: ContainerBuilder,
-    bundle: PathBuf,
+    containerBuilder: ContainerBuilder,
+    bundlePath: PathBuf,
     use_systemd: bool,
     detached: bool,
 }
@@ -25,10 +25,10 @@ pub struct InitContainerBuilder {
 impl InitContainerBuilder {
     /// Generates the base configuration for a new container from which
     /// configuration methods can be chained
-    pub(super) fn new(builder: ContainerBuilder, bundle: PathBuf) -> Self {
+    pub(super) fn new(containerBuilder: ContainerBuilder, bundlePath: PathBuf) -> Self {
         Self {
-            base: builder,
-            bundle,
+            containerBuilder,
+            bundlePath,
             use_systemd: true,
             detached: true,
         }
@@ -47,104 +47,95 @@ impl InitContainerBuilder {
 
     /// Creates a new container
     pub fn build(self) -> Result<Container, LibcontainerError> {
-        let spec = self.load_spec()?;
-        let container_dir = self.create_container_dir()?;
+        let spec = self.loadSpecFromFile()?;
 
-        let mut container = self.create_container_state(&container_dir)?;
-        container
-            .set_systemd(self.use_systemd)
-            .set_annotations(spec.annotations().clone());
+        // rootPath/containerId
+        let containerRootPath = self.createContainerRoot()?;
 
-        let notify_path = container_dir.join(NOTIFY_FILE);
+        let mut container = self.createContainer(&containerRootPath)?;
+        container.set_systemd(self.use_systemd).set_annotations(spec.annotations().clone());
+
+        let notifySockFilePath = containerRootPath.join(NOTIFY_SOCK_FILE_NAME);
+
         // convert path of root file system of the container to absolute path
-        let rootfs = fs::canonicalize(spec.root().as_ref().ok_or(MissingSpecError::Root)?.path())
-            .map_err(LibcontainerError::OtherIO)?;
+        let rootfsPath = fs::canonicalize(spec.root().as_ref().ok_or(MissingSpecError::Root)?.path()).map_err(LibcontainerError::OtherIO)?;
 
-        // if socket file path is given in commandline options,
-        // get file descriptors of console socket
-        let csocketfd = if let Some(console_socket) = &self.base.console_socket {
-            Some(tty::setup_console_socket(
-                &container_dir,
-                console_socket,
-                "console-socket",
-            )?)
-        } else {
-            None
-        };
+        // if socket file path is given in commandline options,get file descriptors of console socket
+        let consoleSockFd =
+            if let Some(console_socket) = &self.containerBuilder.console_socket {
+                Some(tty::setup_console_socket(&containerRootPath, console_socket, "console-socket")?)
+            } else {
+                None
+            };
 
-        let user_ns_config = UserNamespaceConfig::new(&spec)?;
+        let userNsCfg = UserNsCfg::new(&spec)?;
 
-        let config = YoukiConfig::from_spec(&spec, container.id())?;
-        config.save(&container_dir).map_err(|err| {
-            tracing::error!(?container_dir, "failed to save config: {}", err);
+        let youkiCfg = YoukiConfig::from_spec(&spec, container.id())?;
+        youkiCfg.save(&containerRootPath).map_err(|err| {
+            tracing::error!(?containerRootPath, "failed to save config: {}", err);
             err
         })?;
 
-        let mut builder_impl = ContainerBuilderImpl {
+        let mut containerBuilderImpl = ContainerBuilderImpl {
             container_type: ContainerType::InitContainer,
-            syscall: self.base.syscall,
-            container_id: self.base.container_id,
-            pid_file: self.base.pid_file,
-            console_socket: csocketfd,
+            syscall: self.containerBuilder.syscall,
+            container_id: self.containerBuilder.container_id,
+            pid_file: self.containerBuilder.pid_file,
+            console_socket: consoleSockFd,
             use_systemd: self.use_systemd,
             spec: Rc::new(spec),
-            rootfs,
-            user_ns_config,
-            notify_path,
+            rootfs: rootfsPath,
+            user_ns_config: userNsCfg,
+            notify_path: notifySockFilePath,
             container: Some(container.clone()),
-            preserve_fds: self.base.preserve_fds,
+            preserve_fds: self.containerBuilder.preserve_fds,
             detached: self.detached,
-            executor: self.base.executor,
+            executor: self.containerBuilder.executor,
         };
 
-        builder_impl.create()?;
+        containerBuilderImpl.create()?;
 
         container.refresh_state()?;
 
         Ok(container)
     }
 
-    fn create_container_dir(&self) -> Result<PathBuf, LibcontainerError> {
-        let container_dir = self.base.root_path.join(&self.base.container_id);
-        tracing::debug!("container directory will be {:?}", container_dir);
+    fn createContainerRoot(&self) -> Result<PathBuf, LibcontainerError> {
+        let containerRootPath = self.containerBuilder.rootPath.join(&self.containerBuilder.container_id);
+        tracing::debug!("container directory will be {:?}", containerRootPath);
 
-        if container_dir.exists() {
-            tracing::error!(id = self.base.container_id, dir = ?container_dir, "container already exists");
+        if containerRootPath.exists() {
+            tracing::error!(id = self.containerBuilder.container_id, dir = ?containerRootPath, "container already exists");
             return Err(LibcontainerError::Exist);
         }
 
-        std::fs::create_dir_all(&container_dir).map_err(|err| {
-            tracing::error!(
-                ?container_dir,
-                "failed to create container directory: {}",
-                err
-            );
+        fs::create_dir_all(&containerRootPath).map_err(|err| {
+            tracing::error!(?containerRootPath,"failed to create container directory: {}",err);
             LibcontainerError::OtherIO(err)
         })?;
 
-        Ok(container_dir)
+        Ok(containerRootPath)
     }
 
-    fn load_spec(&self) -> Result<Spec, LibcontainerError> {
-        let source_spec_path = self.bundle.join("config.json");
-        let mut spec = Spec::load(source_spec_path)?;
-        Self::validate_spec(&spec)?;
+    /// 读取bundlePath的config.json
+    fn loadSpecFromFile(&self) -> Result<Spec, LibcontainerError> {
+        let specFilePath = self.bundlePath.join("config.json");
 
-        spec.canonicalize_rootfs(&self.bundle).map_err(|err| {
-            tracing::error!(bundle = ?self.bundle, "failed to canonicalize rootfs: {}", err);
+        let mut spec = Spec::load(specFilePath)?;
+        Self::validateSpec(&spec)?;
+
+        spec.canonicalize_rootfs(&self.bundlePath).map_err(|err| {
+            tracing::error!(bundle = ?self.bundlePath, "failed to canonicalize rootfs: {}", err);
             err
         })?;
 
         Ok(spec)
     }
 
-    fn validate_spec(spec: &Spec) -> Result<(), LibcontainerError> {
+    fn validateSpec(spec: &Spec) -> Result<(), LibcontainerError> {
         let version = spec.version();
         if !version.starts_with("1.") {
-            tracing::error!(
-                "runtime spec has incompatible version '{}'. Only 1.X.Y is supported",
-                spec.version()
-            );
+            tracing::error!("runtime spec has incompatible version '{}'. Only 1.X.Y is supported",spec.version());
             Err(ErrInvalidSpec::UnsupportedVersion)?;
         }
 
@@ -154,9 +145,9 @@ impl InitContainerBuilder {
                     tracing::error!(?err, "failed to check if apparmor is enabled");
                     LibcontainerError::OtherIO(err)
                 })?;
+
                 if !apparmor_is_enabled {
-                    tracing::error!(?profile,
-                        "apparmor profile exists in the spec, but apparmor is not activated on this system");
+                    tracing::error!(?profile, "apparmor profile exists in the spec, but apparmor is not activated on this system");
                     Err(ErrInvalidSpec::AppArmorNotEnabled)?;
                 }
             }
@@ -179,20 +170,20 @@ impl InitContainerBuilder {
             }
         }
 
-        utils::validate_spec_for_new_user_ns(spec)?;
+        utils::validateSpecForNewUserNs(spec)?;
 
         Ok(())
     }
 
-    fn create_container_state(&self, container_dir: &Path) -> Result<Container, LibcontainerError> {
+    fn createContainer(&self, containerRootPath: &Path) -> Result<Container, LibcontainerError> {
         let container = Container::new(
-            &self.base.container_id,
+            &self.containerBuilder.container_id,
             ContainerStatus::Creating,
             None,
-            &self.bundle,
-            container_dir,
+            &self.bundlePath,
+            containerRootPath,
         )?;
-        container.save()?;
+        container.saveState2File()?;
         Ok(container)
     }
 }

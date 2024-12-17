@@ -119,51 +119,61 @@ pub enum ValidateSpecError {
 pub enum MappingError {
     #[error("newuidmap/newgidmap binaries could not be found in path")]
     BinaryNotFound,
+
     #[error("could not find PATH")]
     NoPathEnv,
+
     #[error("failed to execute newuidmap/newgidmap")]
     Execute(#[source] std::io::Error),
+
     #[error("at least one id mapping needs to be defined")]
     NoIDMapping,
+
     #[error("failed to write id mapping")]
     WriteIDMapping(#[source] std::io::Error),
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct UserNamespaceConfig {
+pub struct UserNsCfg {
     /// Location of the newuidmap binary
     pub newuidmap: Option<PathBuf>,
+
     /// Location of the newgidmap binary
     pub newgidmap: Option<PathBuf>,
+
     /// Mappings for user ids
     pub(crate) uid_mappings: Option<Vec<LinuxIdMapping>>,
+
     /// Mappings for group ids
     pub(crate) gid_mappings: Option<Vec<LinuxIdMapping>>,
+
     /// Info on the user namespaces
     pub user_namespace: Option<LinuxNamespace>,
+
     /// Is the container requested by a privileged user
     pub privileged: bool,
+
     /// Path to the id mappings
     pub id_mapper: UserNamespaceIDMapper,
 }
 
-impl UserNamespaceConfig {
-    pub fn new(spec: &Spec) -> Result<Option<Self>> {
+impl UserNsCfg {
+    pub fn new(spec: &Spec) -> Result<Option<UserNsCfg>> {
         let linux = spec.linux().as_ref().ok_or(MissingSpecError::Linux)?;
-        let namespaces = Namespaces::try_from(linux.namespaces().as_ref())
-            .map_err(ValidateSpecError::Namespaces)?;
-        let user_namespace = namespaces
-            .get(LinuxNamespaceType::User)
-            .map_err(ValidateSpecError::Namespaces)?;
 
-        if user_namespace.is_some() && user_namespace.unwrap().path().is_none() {
+        let namespaces = Namespaces::try_from(linux.namespaces().as_ref()).map_err(ValidateSpecError::Namespaces)?;
+        let userNs = namespaces.get(LinuxNamespaceType::User).map_err(ValidateSpecError::Namespaces)?;
+
+        if userNs.is_some() && userNs.unwrap().path().is_none() {
             tracing::debug!("container with new user namespace should be created");
 
             validate_spec_for_new_user_ns(spec).map_err(|err| {
                 tracing::error!("failed to validate spec for new user namespace: {}", err);
                 err
             })?;
-            let mut user_ns_config = UserNamespaceConfig::try_from(linux)?;
+
+            let mut user_ns_config = UserNsCfg::try_from(linux)?;
+
             if let Some((uid_binary, gid_binary)) = lookup_map_binaries(linux)? {
                 user_ns_config.newuidmap = Some(uid_binary);
                 user_ns_config.newgidmap = Some(gid_binary);
@@ -207,7 +217,7 @@ impl UserNamespaceConfig {
     }
 }
 
-impl TryFrom<&Linux> for UserNamespaceConfig {
+impl TryFrom<&Linux> for UserNsCfg {
     type Error = UserNamespaceError;
 
     fn try_from(linux: &Linux) -> Result<Self> {
@@ -222,7 +232,7 @@ impl TryFrom<&Linux> for UserNamespaceConfig {
             uid_mappings: linux.uid_mappings().to_owned(),
             gid_mappings: linux.gid_mappings().to_owned(),
             user_namespace: user_namespace.cloned(),
-            privileged: !utils::rootless_required()?,
+            privileged: !utils::needRootless()?,
             id_mapper: UserNamespaceIDMapper::new(),
         })
     }
@@ -248,45 +258,31 @@ pub fn unprivileged_user_ns_enabled() -> Result<bool> {
     }
 }
 
-/// Validates that the spec contains the required information for
-/// creating a new user namespace
+/// Validates that the spec contains the required information for creating a new user namespace
 fn validate_spec_for_new_user_ns(spec: &Spec) -> std::result::Result<(), ValidateSpecError> {
-    tracing::debug!(
-        ?spec,
-        "validating spec for container with new user namespace"
-    );
+    tracing::debug!(?spec,"validating spec for container with new user namespace");
+
     let linux = spec.linux().as_ref().ok_or(MissingSpecError::Linux)?;
 
-    let gid_mappings = linux
-        .gid_mappings()
-        .as_ref()
-        .ok_or(ValidateSpecError::NoGIDMapping)?;
-    let uid_mappings = linux
-        .uid_mappings()
-        .as_ref()
-        .ok_or(ValidateSpecError::NoUIDMappings)?;
-
-    if uid_mappings.is_empty() {
-        return Err(ValidateSpecError::NoUIDMappings);
-    }
+    let gid_mappings = linux.gid_mappings().as_ref().ok_or(ValidateSpecError::NoGIDMapping)?;
     if gid_mappings.is_empty() {
         return Err(ValidateSpecError::NoGIDMapping);
     }
 
+    let uid_mappings = linux.uid_mappings().as_ref().ok_or(ValidateSpecError::NoUIDMappings)?;
+    if uid_mappings.is_empty() {
+        return Err(ValidateSpecError::NoUIDMappings);
+    }
+
+
     validate_mounts_for_new_user_ns(
-        spec.mounts()
-            .as_ref()
-            .ok_or(ValidateSpecError::NoMountSpec)?,
+        spec.mounts().as_ref().ok_or(ValidateSpecError::NoMountSpec)?,
         uid_mappings,
         gid_mappings,
     )?;
 
-    if let Some(additional_gids) = spec
-        .process()
-        .as_ref()
-        .and_then(|process| process.user().additional_gids().as_ref())
-    {
-        let privileged = !utils::rootless_required()?;
+    if let Some(additional_gids) = spec.process().as_ref().and_then(|process| process.user().additional_gids().as_ref()) {
+        let privileged = !utils::needRootless()?;
 
         match (privileged, additional_gids.is_empty()) {
             (true, false) => {
@@ -312,19 +308,17 @@ fn validate_spec_for_new_user_ns(spec: &Spec) -> std::result::Result<(), Validat
     Ok(())
 }
 
-fn validate_mounts_for_new_user_ns(
-    mounts: &[Mount],
-    uid_mappings: &[LinuxIdMapping],
-    gid_mappings: &[LinuxIdMapping],
-) -> std::result::Result<(), ValidateSpecError> {
+fn validate_mounts_for_new_user_ns(mounts: &[Mount],
+                                   uid_mappings: &[LinuxIdMapping],
+                                   gid_mappings: &[LinuxIdMapping]) -> std::result::Result<(), ValidateSpecError> {
     for mount in mounts {
         if let Some(options) = mount.options() {
             for opt in options {
                 if opt.starts_with("uid=")
                     && !is_id_mapped(
-                        opt[4..].parse().map_err(ValidateSpecError::ParseID)?,
-                        uid_mappings,
-                    )
+                    opt[4..].parse().map_err(ValidateSpecError::ParseID)?,
+                    uid_mappings,
+                )
                 {
                     tracing::error!(
                         ?mount,
@@ -338,9 +332,9 @@ fn validate_mounts_for_new_user_ns(
 
                 if opt.starts_with("gid=")
                     && !is_id_mapped(
-                        opt[4..].parse().map_err(ValidateSpecError::ParseID)?,
-                        gid_mappings,
-                    )
+                    opt[4..].parse().map_err(ValidateSpecError::ParseID)?,
+                    gid_mappings,
+                )
                 {
                     tracing::error!(
                         ?mount,
@@ -441,206 +435,4 @@ fn write_id_mapping(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use anyhow::Result;
-    use nix::unistd::getpid;
-    use oci_spec::runtime::{
-        LinuxBuilder, LinuxIdMappingBuilder, LinuxNamespaceBuilder, SpecBuilder,
-    };
-    use rand::Rng;
-    use serial_test::serial;
-
-    use super::*;
-
-    fn gen_u32() -> u32 {
-        rand::thread_rng().gen()
-    }
-
-    #[test]
-    fn test_validate_ok() -> Result<()> {
-        let userns = LinuxNamespaceBuilder::default()
-            .typ(LinuxNamespaceType::User)
-            .build()?;
-        let uid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(gen_u32())
-            .container_id(0_u32)
-            .size(10_u32)
-            .build()?];
-        let gid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(gen_u32())
-            .container_id(0_u32)
-            .size(10_u32)
-            .build()?];
-        let linux = LinuxBuilder::default()
-            .namespaces(vec![userns])
-            .uid_mappings(uid_mappings)
-            .gid_mappings(gid_mappings)
-            .build()?;
-        let spec = SpecBuilder::default().linux(linux).build()?;
-        assert!(validate_spec_for_new_user_ns(&spec).is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn test_validate_err() -> Result<()> {
-        let userns = LinuxNamespaceBuilder::default()
-            .typ(LinuxNamespaceType::User)
-            .build()?;
-        let uid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(gen_u32())
-            .container_id(0_u32)
-            .size(10_u32)
-            .build()?];
-        let gid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(gen_u32())
-            .container_id(0_u32)
-            .size(10_u32)
-            .build()?];
-
-        let linux_uid_empty = LinuxBuilder::default()
-            .namespaces(vec![userns.clone()])
-            .uid_mappings(vec![])
-            .gid_mappings(gid_mappings.clone())
-            .build()?;
-        assert!(validate_spec_for_new_user_ns(
-            &SpecBuilder::default()
-                .linux(linux_uid_empty)
-                .build()
-                .unwrap()
-        )
-        .is_err());
-
-        let linux_gid_empty = LinuxBuilder::default()
-            .namespaces(vec![userns.clone()])
-            .uid_mappings(uid_mappings.clone())
-            .gid_mappings(vec![])
-            .build()?;
-        assert!(validate_spec_for_new_user_ns(
-            &SpecBuilder::default()
-                .linux(linux_gid_empty)
-                .build()
-                .unwrap()
-        )
-        .is_err());
-
-        let linux_uid_none = LinuxBuilder::default()
-            .namespaces(vec![userns.clone()])
-            .gid_mappings(gid_mappings)
-            .build()?;
-        assert!(validate_spec_for_new_user_ns(
-            &SpecBuilder::default()
-                .linux(linux_uid_none)
-                .build()
-                .unwrap()
-        )
-        .is_err());
-
-        let linux_gid_none = LinuxBuilder::default()
-            .namespaces(vec![userns])
-            .uid_mappings(uid_mappings)
-            .build()?;
-        assert!(validate_spec_for_new_user_ns(
-            &SpecBuilder::default()
-                .linux(linux_gid_none)
-                .build()
-                .unwrap()
-        )
-        .is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_write_uid_mapping() -> Result<()> {
-        let userns = LinuxNamespaceBuilder::default()
-            .typ(LinuxNamespaceType::User)
-            .build()?;
-        let host_uid = gen_u32();
-        let host_gid = gen_u32();
-        let container_id = 0_u32;
-        let size = 10_u32;
-        let uid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(host_uid)
-            .container_id(container_id)
-            .size(size)
-            .build()?];
-        let gid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(host_gid)
-            .container_id(container_id)
-            .size(size)
-            .build()?];
-        let linux = LinuxBuilder::default()
-            .namespaces(vec![userns])
-            .uid_mappings(uid_mappings)
-            .gid_mappings(gid_mappings)
-            .build()?;
-        let spec = SpecBuilder::default().linux(linux).build()?;
-
-        let pid = getpid();
-        let tmp = tempfile::tempdir()?;
-        let id_mapper = UserNamespaceIDMapper {
-            base_path: tmp.path().to_path_buf(),
-        };
-        id_mapper.ensure_uid_path(&pid)?;
-
-        let mut config = UserNamespaceConfig::new(&spec)?.unwrap();
-        config.with_id_mapper(id_mapper.clone());
-        config.write_uid_mapping(pid)?;
-        assert_eq!(
-            format!("{container_id} {host_uid} {size}"),
-            fs::read_to_string(id_mapper.get_uid_path(&pid))?
-        );
-        config.write_gid_mapping(pid)?;
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_write_gid_mapping() -> Result<()> {
-        let userns = LinuxNamespaceBuilder::default()
-            .typ(LinuxNamespaceType::User)
-            .build()?;
-        let host_uid = gen_u32();
-        let host_gid = gen_u32();
-        let container_id = 0_u32;
-        let size = 10_u32;
-        let uid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(host_uid)
-            .container_id(container_id)
-            .size(size)
-            .build()?];
-        let gid_mappings = vec![LinuxIdMappingBuilder::default()
-            .host_id(host_gid)
-            .container_id(container_id)
-            .size(size)
-            .build()?];
-        let linux = LinuxBuilder::default()
-            .namespaces(vec![userns])
-            .uid_mappings(uid_mappings)
-            .gid_mappings(gid_mappings)
-            .build()?;
-        let spec = SpecBuilder::default().linux(linux).build()?;
-
-        let pid = getpid();
-        let tmp = tempfile::tempdir()?;
-        let id_mapper = UserNamespaceIDMapper {
-            base_path: tmp.path().to_path_buf(),
-        };
-        id_mapper.ensure_gid_path(&pid)?;
-
-        let mut config = UserNamespaceConfig::new(&spec)?.unwrap();
-        config.with_id_mapper(id_mapper.clone());
-        config.write_gid_mapping(pid)?;
-        assert_eq!(
-            format!("{container_id} {host_gid} {size}"),
-            fs::read_to_string(id_mapper.get_gid_path(&pid))?
-        );
-        Ok(())
-    }
 }

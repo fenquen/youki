@@ -84,8 +84,7 @@ pub trait Executor: CloneBoxExecutor {
         env::vars().for_each(|(key, _value)| env::remove_var(key));
 
         // Next, set envs based on the spec
-        envs.iter()
-            .for_each(|(key, value)| env::set_var(key, value));
+        envs.iter().for_each(|(key, value)| env::set_var(key, value));
 
         Ok(())
     }

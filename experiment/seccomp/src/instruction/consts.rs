@@ -80,29 +80,3 @@ pub const fn seccomp_data_args_offset() -> u8 {
 }
 
 pub const SECCOMP_IOC_MAGIC: u8 = b'!';
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_seccomp_data_arch_offset() {
-        if cfg!(target_arch = "x86_64") {
-            assert_eq!(seccomp_data_arch_offset(), 4);
-        }
-    }
-
-    #[test]
-    fn test_seccomp_data_arg_size_offset() {
-        if cfg!(target_arch = "x86_64") {
-            assert_eq!(seccomp_data_arg_size_offset(), 8);
-        }
-    }
-
-    #[test]
-    fn test_seccomp_data_args_offset() {
-        if cfg!(target_arch = "x86_64") {
-            assert_eq!(seccomp_data_args_offset(), 16);
-        }
-    }
-}

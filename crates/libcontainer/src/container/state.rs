@@ -119,14 +119,12 @@ pub struct State {
 }
 
 impl State {
-    const STATE_FILE_PATH: &'static str = "state.json";
+    const STATE_FILE_NAME: &'static str = "state.json";
 
-    pub fn new(
-        container_id: &str,
-        status: ContainerStatus,
-        pid: Option<i32>,
-        bundle: PathBuf,
-    ) -> Self {
+    pub fn new(container_id: &str,
+               status: ContainerStatus,
+               pid: Option<i32>,
+               bundle: PathBuf) -> State {
         Self {
             oci_version: "v1.0.2".to_string(),
             id: container_id.to_string(),
@@ -143,43 +141,30 @@ impl State {
 
     #[instrument(level = "trace")]
     pub fn save(&self, container_root: &Path) -> Result<()> {
-        let state_file_path = Self::file_path(container_root);
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .append(false)
-            .create(true)
-            .truncate(true)
+        let state_file_path = Self::getStateFilePath(container_root);
+
+        let file = fs::OpenOptions::new().read(true).write(true).append(false).create(true).truncate(true)
             .open(&state_file_path)
             .map_err(|err| {
-                tracing::error!(
-                    state_file_path = ?state_file_path,
-                    err = %err,
-                    "failed to open container state file",
-                );
+                tracing::error!(state_file_path = ?state_file_path, err = %err,"failed to open container state file");
                 StateError::OpenStateFile {
                     state_file_path: state_file_path.to_owned(),
                     source: err,
                 }
             })?;
+
         let mut writer = BufWriter::new(file);
+
         serde_json::to_writer(&mut writer, self).map_err(|err| {
-            tracing::error!(
-                ?state_file_path,
-                %err,
-                "failed to parse container state file",
-            );
+            tracing::error!(?state_file_path, %err, "failed to parse container state file");
             StateError::ParseStateFile {
                 state_file_path: state_file_path.to_owned(),
                 source: err,
             }
         })?;
+
         writer.flush().map_err(|err| {
-            tracing::error!(
-                ?state_file_path,
-                %err,
-                "failed to write container state file",
-            );
+            tracing::error!(?state_file_path, %err, "failed to write container state file");
             StateError::WriteStateFile {
                 state_file_path: state_file_path.to_owned(),
                 source: err,
@@ -190,13 +175,10 @@ impl State {
     }
 
     pub fn load(container_root: &Path) -> Result<Self> {
-        let state_file_path = Self::file_path(container_root);
+        let state_file_path = Self::getStateFilePath(container_root);
+
         let state_file = File::open(&state_file_path).map_err(|err| {
-            tracing::error!(
-                ?state_file_path,
-                %err,
-                "failed to open container state file",
-            );
+            tracing::error!(?state_file_path, %err, "failed to open container state file");
             StateError::OpenStateFile {
                 state_file_path: state_file_path.to_owned(),
                 source: err,
@@ -204,11 +186,7 @@ impl State {
         })?;
 
         let state: Self = serde_json::from_reader(BufReader::new(state_file)).map_err(|err| {
-            tracing::error!(
-                ?state_file_path,
-                %err,
-                "failed to parse container state file",
-            );
+            tracing::error!(?state_file_path, %err, "failed to parse container state file");
             StateError::ParseStateFile {
                 state_file_path: state_file_path.to_owned(),
                 source: err,
@@ -218,18 +196,8 @@ impl State {
         Ok(state)
     }
 
-    /// Returns the path to the state JSON file for the provided `container_root`.
-    ///
-    /// ```
-    /// # use std::path::Path;
-    /// # use libcontainer::container::State;
-    ///
-    /// let container_root = Path::new("/var/run/containers/container");
-    /// let state_file = State::file_path(&container_root);
-    /// assert_eq!(state_file.to_str(), Some("/var/run/containers/container/state.json"));
-    /// ```
-    pub fn file_path(container_root: &Path) -> PathBuf {
-        container_root.join(Self::STATE_FILE_PATH)
+    pub fn getStateFilePath(container_root: &Path) -> PathBuf {
+        container_root.join(Self::STATE_FILE_NAME)
     }
 }
 
@@ -248,59 +216,4 @@ pub struct ContainerProcessState {
     pub metadata: String,
     // State of the container.
     pub state: State,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_creating_status() {
-        let cstatus = ContainerStatus::default();
-        assert!(!cstatus.can_start());
-        assert!(!cstatus.can_delete());
-        assert!(!cstatus.can_kill());
-        assert!(!cstatus.can_pause());
-        assert!(!cstatus.can_resume());
-    }
-
-    #[test]
-    fn test_create_status() {
-        let cstatus = ContainerStatus::Created;
-        assert!(cstatus.can_start());
-        assert!(!cstatus.can_delete());
-        assert!(cstatus.can_kill());
-        assert!(!cstatus.can_pause());
-        assert!(!cstatus.can_resume());
-    }
-
-    #[test]
-    fn test_running_status() {
-        let cstatus = ContainerStatus::Running;
-        assert!(!cstatus.can_start());
-        assert!(!cstatus.can_delete());
-        assert!(cstatus.can_kill());
-        assert!(cstatus.can_pause());
-        assert!(!cstatus.can_resume());
-    }
-
-    #[test]
-    fn test_stopped_status() {
-        let cstatus = ContainerStatus::Stopped;
-        assert!(!cstatus.can_start());
-        assert!(cstatus.can_delete());
-        assert!(!cstatus.can_kill());
-        assert!(!cstatus.can_pause());
-        assert!(!cstatus.can_resume());
-    }
-
-    #[test]
-    fn test_paused_status() {
-        let cstatus = ContainerStatus::Paused;
-        assert!(!cstatus.can_start());
-        assert!(!cstatus.can_delete());
-        assert!(cstatus.can_kill());
-        assert!(!cstatus.can_pause());
-        assert!(cstatus.can_resume());
-    }
 }

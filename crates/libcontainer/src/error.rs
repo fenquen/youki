@@ -49,7 +49,7 @@ pub enum LibcontainerError {
     #[error("oci spec error")]
     Spec(#[from] oci_spec::OciSpecError),
     #[error(transparent)]
-    MainProcess(#[from] crate::process::container_main_process::ProcessError),
+    MainProcess(#[from] crate::process::container_main_proc::ProcessError),
     #[error(transparent)]
     Procfs(#[from] procfs::ProcError),
     #[error(transparent)]

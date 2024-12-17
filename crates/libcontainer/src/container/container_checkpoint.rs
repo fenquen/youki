@@ -153,7 +153,7 @@ impl Container {
         })?;
 
         if !opts.leave_running {
-            self.set_status(ContainerStatus::Stopped).save()?;
+            self.set_status(ContainerStatus::Stopped).saveState2File()?;
         }
 
         tracing::debug!("container {} checkpointed", self.id());

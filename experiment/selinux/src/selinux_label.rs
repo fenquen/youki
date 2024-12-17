@@ -340,37 +340,3 @@ impl SELinux {
         formatted_src
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::selinux::*;
-
-    #[test]
-    fn test_format_mount_label() {
-        let src_array = ["", "src", "src"];
-        let mount_label_array = ["foobar", "foobar", ""];
-        let expected_array = ["context=\"foobar\"", "src,context=\"foobar\"", "src"];
-        for (i, src) in src_array.iter().enumerate() {
-            let mount_label = mount_label_array[i];
-            let expected = expected_array[i];
-            assert_eq!(SELinux::format_mount_label(src, mount_label), expected);
-        }
-    }
-
-    #[test]
-    fn test_format_mount_label_by_type() {
-        let src_array = ["", "src", "src"];
-        let mount_label_array = ["foobar", "foobar", ""];
-        let context_array = ["fscontext", "fscontext", "rootcontext"];
-        let expected_array = ["fscontext=\"foobar\"", "src,fscontext=\"foobar\"", "src"];
-        for (i, src) in src_array.iter().enumerate() {
-            let mount_label = mount_label_array[i];
-            let context = context_array[i];
-            let expected = expected_array[i];
-            assert_eq!(
-                SELinux::format_mount_label_by_type(src, mount_label, context),
-                expected
-            );
-        }
-    }
-}

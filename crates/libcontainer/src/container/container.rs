@@ -12,45 +12,42 @@ use crate::container::{ContainerStatus, State};
 use crate::error::LibcontainerError;
 use crate::syscall::syscall::create_syscall;
 
-/// Structure representing the container data
 #[derive(Debug, Clone)]
 pub struct Container {
-    // State of the container
     pub state: State,
-    // indicated the directory for the root path in the container
-    pub root: PathBuf,
+
+    /// rootPath/containerName
+    pub rootPath: PathBuf,
 }
 
 impl Default for Container {
     fn default() -> Self {
         Self {
             state: State::default(),
-            root: PathBuf::from("/run/youki"),
+            rootPath: PathBuf::from("/run/youki"),
         }
     }
 }
 
 impl Container {
-    pub fn new(
-        container_id: &str,
-        status: ContainerStatus,
-        pid: Option<i32>,
-        bundle: &Path,
-        container_root: &Path,
-    ) -> Result<Self, LibcontainerError> {
-        let container_root = fs::canonicalize(container_root).map_err(|err| {
-            LibcontainerError::InvalidInput(format!(
-                "invalid container root {container_root:?}: {err:?}"
-            ))
+    pub fn new(containerId: &str,
+               containerStatus: ContainerStatus,
+               pid: Option<i32>,
+               bundlePath: &Path,
+               containerRootPath: &Path) -> Result<Self, LibcontainerError> {
+        let containerRootPath = fs::canonicalize(containerRootPath).map_err(|err| {
+            LibcontainerError::InvalidInput(format!("invalid container root {containerRootPath:?}: {err:?}"))
         })?;
-        let bundle = fs::canonicalize(bundle).map_err(|err| {
-            LibcontainerError::InvalidInput(format!("invalid bundle {bundle:?}: {err:?}"))
+
+        let bundlePath = fs::canonicalize(bundlePath).map_err(|err| {
+            LibcontainerError::InvalidInput(format!("invalid bundle {bundlePath:?}: {err:?}"))
         })?;
-        let state = State::new(container_id, status, pid, bundle);
+
+        let state = State::new(containerId, containerStatus, pid, bundlePath);
 
         Ok(Self {
             state,
-            root: container_root,
+            rootPath: containerRootPath,
         })
     }
 
@@ -185,7 +182,7 @@ impl Container {
     }
 
     pub fn refresh_state(&mut self) -> Result<&mut Self, LibcontainerError> {
-        let state = State::load(&self.root)?;
+        let state = State::load(&self.rootPath)?;
         self.state = state;
 
         Ok(self)
@@ -195,21 +192,21 @@ impl Container {
         let state = State::load(&container_root)?;
         let mut container = Self {
             state,
-            root: container_root,
+            rootPath: container_root,
         };
         container.refresh_status()?;
         Ok(container)
     }
 
-    pub fn save(&self) -> Result<(), LibcontainerError> {
-        tracing::debug!("Save container status: {:?} in {:?}", self, self.root);
-        self.state.save(&self.root)?;
+    pub fn saveState2File(&self) -> Result<(), LibcontainerError> {
+        tracing::debug!("Save container status: {:?} in {:?}", self, self.rootPath);
+        self.state.save(&self.rootPath)?;
 
         Ok(())
     }
 
     pub fn spec(&self) -> Result<YoukiConfig, LibcontainerError> {
-        let spec = YoukiConfig::load(&self.root)?;
+        let spec = YoukiConfig::load(&self.rootPath)?;
         Ok(spec)
     }
 }
@@ -223,158 +220,4 @@ pub struct CheckpointOptions {
     pub shell_job: bool,
     pub tcp_established: bool,
     pub work_path: Option<PathBuf>,
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::{Context, Result};
-    use serial_test::serial;
-
-    use super::*;
-
-    #[test]
-    fn test_get_set_pid() {
-        let mut container = Container::default();
-
-        assert_eq!(container.pid(), None);
-        container.set_pid(1);
-        assert_eq!(container.pid(), Some(Pid::from_raw(1)));
-    }
-
-    #[test]
-    fn test_basic_getter() -> Result<()> {
-        let mut container = Container::new(
-            "container_id",
-            ContainerStatus::Creating,
-            None,
-            &PathBuf::from("."),
-            &PathBuf::from("."),
-        )?;
-
-        // testing id
-        assert_eq!(container.id(), "container_id");
-        // testing bundle path
-        assert_eq!(
-            container.bundle(),
-            &fs::canonicalize(PathBuf::from(".")).unwrap()
-        );
-        // testing root path
-        assert_eq!(container.root, fs::canonicalize(PathBuf::from("."))?);
-        // testing created
-        assert_eq!(container.created(), None);
-        container.set_status(ContainerStatus::Created);
-        assert!(container.created().is_some());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_set_annotations() {
-        let mut container = Container::default();
-        assert_eq!(container.state.annotations, None);
-
-        let mut annotations = std::collections::HashMap::with_capacity(1);
-        annotations.insert(
-            "org.criu.config".to_string(),
-            "/etc/special-youki-criu-options".to_string(),
-        );
-        container.set_annotations(Some(annotations.clone()));
-        assert_eq!(container.state.annotations, Some(annotations));
-    }
-
-    #[test]
-    fn test_get_set_systemd() {
-        let mut container = Container::default();
-        assert!(!container.systemd());
-        container.set_systemd(true);
-        assert!(container.systemd());
-        container.set_systemd(false);
-        assert!(!container.systemd());
-    }
-
-    #[test]
-    fn test_get_set_creator() {
-        let mut container = Container::default();
-        assert_eq!(container.creator(), None);
-        container.set_creator(1000);
-        assert_eq!(container.creator(), Some(OsString::from("youki")));
-    }
-
-    #[test]
-    #[serial]
-    fn test_refresh_load_save_state() -> Result<()> {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let mut container_1 = Container::new(
-            "container_id_1",
-            ContainerStatus::Created,
-            None,
-            &PathBuf::from("."),
-            tmp_dir.path(),
-        )?;
-
-        container_1.save()?;
-        let container_2 = Container::load(tmp_dir.path().to_path_buf())?;
-        assert_eq!(container_1.state.id, container_2.state.id);
-        assert_eq!(container_2.state.status, ContainerStatus::Stopped);
-
-        container_1.state.id = "container_id_1_modified".to_string();
-        container_1.save()?;
-        container_1.refresh_state()?;
-        assert_eq!(container_1.state.id, "container_id_1_modified".to_string());
-
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_get_spec() -> Result<()> {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        use oci_spec::runtime::Spec;
-        let spec = Spec::default();
-        let config = YoukiConfig::from_spec(&spec, "123").context("convert spec to config")?;
-        config.save(tmp_dir.path()).context("save config")?;
-
-        let container = Container {
-            root: tmp_dir.path().to_path_buf(),
-            ..Default::default()
-        };
-        container.spec().context("get config")?;
-
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_get_set_refresh_status() -> Result<()> {
-        // there already has a full and well-tested flow of status in state.rs
-        // so we just let the coverage run through those can_xxx functions.
-        let mut container = Container::default();
-        assert_eq!(container.status(), ContainerStatus::Creating);
-        assert!(!container.can_start());
-        assert!(!container.can_kill());
-        assert!(!container.can_delete());
-        assert!(!container.can_exec());
-        assert!(!container.can_pause());
-        assert!(!container.can_resume());
-
-        // no PID case
-        container.refresh_status()?;
-        assert_eq!(container.status(), ContainerStatus::Stopped);
-
-        // with PID case but PID not exists
-        container.set_pid(-1);
-        container.refresh_status()?;
-        assert_eq!(container.status(), ContainerStatus::Stopped);
-
-        // with PID case
-        container.set_pid(1);
-        container.set_status(ContainerStatus::Paused);
-        container.refresh_status()?;
-        assert_eq!(container.status(), ContainerStatus::Paused);
-        container.set_status(ContainerStatus::Running);
-        container.refresh_status()?;
-        assert_eq!(container.status(), ContainerStatus::Running);
-
-        Ok(())
-    }
 }

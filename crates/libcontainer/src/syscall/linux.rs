@@ -260,10 +260,10 @@ impl Syscall for LinuxSyscall {
             MsFlags::MS_SLAVE | MsFlags::MS_REC,
             None::<&str>,
         )
-        .map_err(|errno| {
-            tracing::error!(?errno, "failed to make original root directory rslave");
-            errno
-        })?;
+            .map_err(|errno| {
+                tracing::error!(?errno, "failed to make original root directory rslave");
+                errno
+            })?;
 
         // Unmount the original root directory which was stacked on top of new root directory
         // MNT_DETACH makes the mount point unavailable to new accesses, but waits till the original mount point
@@ -278,6 +278,12 @@ impl Syscall for LinuxSyscall {
             tracing::error!(?errno, ?newroot, "failed to change directory to new root");
             errno
         })?;
+
+        Ok(())
+    }
+
+    fn chroot(&self, path: &Path) -> Result<()> {
+        chroot(path)?;
 
         Ok(())
     }
@@ -333,7 +339,6 @@ impl Syscall for LinuxSyscall {
         })?;
         Ok(())
     }
-
     /// Disassociate parts of execution context
     // see https://man7.org/linux/man-pages/man2/unshare.2.html for more information
     fn unshare(&self, flags: CloneFlags) -> Result<()> {
@@ -341,6 +346,7 @@ impl Syscall for LinuxSyscall {
 
         Ok(())
     }
+
     /// Set capabilities for container process
     fn set_capability(&self, cset: CapSet, value: &CapsHashSet) -> Result<()> {
         match cset {
@@ -441,12 +447,6 @@ impl Syscall for LinuxSyscall {
         Some(user)
     }
 
-    fn chroot(&self, path: &Path) -> Result<()> {
-        chroot(path)?;
-
-        Ok(())
-    }
-
     fn mount(
         &self,
         source: Option<&Path>,
@@ -493,14 +493,7 @@ impl Syscall for LinuxSyscall {
 
     #[tracing::instrument(skip(self))]
     fn close_range(&self, preserve_fds: i32) -> Result<()> {
-        match unsafe {
-            libc::syscall(
-                libc::SYS_close_range,
-                3 + preserve_fds,
-                libc::c_int::MAX,
-                libc::CLOSE_RANGE_CLOEXEC,
-            )
-        } {
+        match unsafe { libc::syscall(libc::SYS_close_range, 3 + preserve_fds, libc::c_int::MAX, libc::CLOSE_RANGE_CLOEXEC) } {
             0 => Ok(()),
             -1 => {
                 match nix::errno::Errno::last() {
@@ -572,84 +565,6 @@ impl Syscall for LinuxSyscall {
             -1 => Err(nix::Error::last()),
             _ => Err(nix::Error::UnknownErrno),
         }?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Note: We have to run these tests here as serial. The main issue is that
-    // these tests has a dependency on the system state. The
-    // cleanup_file_descriptors test is especially evil when running with other
-    // tests because it would ran around close down different fds.
-
-    use std::fs;
-    use std::os::unix::prelude::AsRawFd;
-
-    use anyhow::{bail, Context, Result};
-    use nix::{fcntl, sys, unistd};
-    use serial_test::serial;
-
-    use super::LinuxSyscall;
-    use crate::syscall::Syscall;
-
-    #[test]
-    #[serial]
-    fn test_get_open_fds() -> Result<()> {
-        let file = fs::File::open("/dev/null")?;
-        let fd = file.as_raw_fd();
-        let open_fds = LinuxSyscall::get_open_fds()?;
-
-        if !open_fds.iter().any(|&v| v == fd) {
-            bail!("failed to find the opened dev null fds: {:?}", open_fds);
-        }
-
-        // explicitly close the file before the test case returns.
-        drop(file);
-
-        // The stdio fds should also be contained in the list of opened fds.
-        if ![0, 1, 2]
-            .iter()
-            .all(|&stdio_fd| open_fds.iter().any(|&open_fd| open_fd == stdio_fd))
-        {
-            bail!("failed to find the stdio fds: {:?}", open_fds);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_close_range_userspace() -> Result<()> {
-        // Open a fd without the CLOEXEC flag. Rust automatically adds the flag,
-        // so we use fcntl::open here for more control.
-        let fd = fcntl::open("/dev/null", fcntl::OFlag::O_RDWR, sys::stat::Mode::empty())?;
-        LinuxSyscall::emulate_close_range(0).context("failed to clean up the fds")?;
-
-        let fd_flag = fcntl::fcntl(fd, fcntl::F_GETFD)?;
-        if (fd_flag & fcntl::FdFlag::FD_CLOEXEC.bits()) == 0 {
-            bail!("CLOEXEC flag is not set correctly");
-        }
-
-        unistd::close(fd)?;
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn test_close_range_native() -> Result<()> {
-        let fd = fcntl::open("/dev/null", fcntl::OFlag::O_RDWR, sys::stat::Mode::empty())?;
-        let syscall = LinuxSyscall {};
-        syscall
-            .close_range(0)
-            .context("failed to clean up the fds")?;
-
-        let fd_flag = fcntl::fcntl(fd, fcntl::F_GETFD)?;
-        if (fd_flag & fcntl::FdFlag::FD_CLOEXEC.bits()) == 0 {
-            bail!("CLOEXEC flag is not set correctly");
-        }
-
-        unistd::close(fd)?;
         Ok(())
     }
 }

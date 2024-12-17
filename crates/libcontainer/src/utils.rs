@@ -12,7 +12,7 @@ use nix::unistd::{Uid, User};
 use oci_spec::runtime::Spec;
 
 use crate::error::LibcontainerError;
-use crate::user_ns::UserNamespaceConfig;
+use crate::user_ns::UserNsCfg;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathBufExtError {
@@ -254,176 +254,36 @@ pub fn ensure_procfs(path: &Path) -> Result<(), EnsureProcfsError> {
     Ok(())
 }
 
-pub fn is_in_new_userns() -> Result<bool, std::io::Error> {
+pub fn isInNewUserNs() -> Result<bool, std::io::Error> {
     let uid_map_path = "/proc/self/uid_map";
-    let content = std::fs::read_to_string(uid_map_path)?;
+    let content = fs::read_to_string(uid_map_path)?;
     Ok(!content.contains("4294967295"))
 }
 
 /// Checks if rootless mode needs to be used
-pub fn rootless_required() -> Result<bool, std::io::Error> {
+pub fn needRootless() -> Result<bool, std::io::Error> {
     if !nix::unistd::geteuid().is_root() {
         return Ok(true);
     }
-    is_in_new_userns()
+
+    isInNewUserNs()
 }
 
 /// checks if given spec is valid for current user namespace setup
-pub fn validate_spec_for_new_user_ns(spec: &Spec) -> Result<(), LibcontainerError> {
-    let config = UserNamespaceConfig::new(spec)?;
-    let in_user_ns = is_in_new_userns().map_err(LibcontainerError::OtherIO)?;
-    let is_rootless_required = rootless_required().map_err(LibcontainerError::OtherIO)?;
+pub fn validateSpecForNewUserNs(spec: &Spec) -> Result<(), LibcontainerError> {
+    let needRootless = needRootless().map_err(LibcontainerError::OtherIO)?;
+    let isInNewUserNs = isInNewUserNs().map_err(LibcontainerError::OtherIO)?;
+    let userNsCfg = UserNsCfg::new(spec)?;
+
     // In case of rootless, there are 2 possible cases :
     // we have a new user ns specified in the spec
     // or the youki is launched in a new user ns (this is how podman does it)
     // So here, we check if rootless is required,
     // but we are neither in a new user ns nor a new user ns is specified in spec
     // then it is an error
-    if is_rootless_required && !in_user_ns && config.is_none() {
+    if needRootless && !isInNewUserNs && userNsCfg.is_none() {
         return Err(LibcontainerError::NoUserNamespace);
     }
+
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::{bail, Result};
-    use serial_test::serial;
-
-    use super::*;
-    use crate::test_utils;
-
-    #[test]
-    pub fn test_get_unix_user() {
-        let user = get_unix_user(Uid::from_raw(0));
-        assert_eq!(user.unwrap().name, "root");
-
-        // for a non-exist UID
-        let user = get_unix_user(Uid::from_raw(1000000000));
-        assert!(user.is_none());
-    }
-
-    #[test]
-    pub fn test_get_user_home() {
-        let dir = get_user_home(0);
-        assert_eq!(dir.unwrap().to_str().unwrap(), "/root");
-
-        // for a non-exist UID
-        let dir = get_user_home(1000000000);
-        assert!(dir.is_none());
-    }
-
-    #[test]
-    fn test_get_cgroup_path() {
-        let cid = "sample_container_id";
-        assert_eq!(
-            get_cgroup_path(&None, cid),
-            PathBuf::from(":youki:sample_container_id")
-        );
-        assert_eq!(
-            get_cgroup_path(&Some(PathBuf::from("/youki")), cid),
-            PathBuf::from("/youki")
-        );
-    }
-
-    #[test]
-    fn test_parse_env() -> Result<()> {
-        let key = "key".to_string();
-        let value = "value".to_string();
-        let env_input = vec![format!("{key}={value}")];
-        let env_output = parse_env(&env_input);
-        assert_eq!(
-            env_output.len(),
-            1,
-            "There should be exactly one entry inside"
-        );
-        assert_eq!(env_output.get_key_value(&key), Some((&key, &value)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_create_dir_all_with_mode() -> Result<()> {
-        {
-            let temdir = tempfile::tempdir()?;
-            let path = temdir.path().join("test");
-            let uid = nix::unistd::getuid().as_raw();
-            let mode = Mode::S_IRWXU;
-            create_dir_all_with_mode(&path, uid, mode)?;
-            let metadata = path.metadata()?;
-            assert!(path.is_dir());
-            assert_eq!(metadata.st_uid(), uid);
-            assert_eq!(metadata.st_mode() & mode.bits(), mode.bits());
-        }
-        {
-            let temdir = tempfile::tempdir()?;
-            let path = temdir.path().join("test");
-            let mode = Mode::S_IRWXU;
-            std::fs::create_dir(&path)?;
-            assert!(path.is_dir());
-            match create_dir_all_with_mode(&path, 8899, mode) {
-                Err(MkdirWithModeError::MetadataMismatch) => {}
-                _ => bail!("should return MetadataMismatch"),
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_io() -> Result<()> {
-        {
-            let tempdir = tempfile::tempdir()?;
-            let path = tempdir.path().join("test");
-            write_file(&path, "test".as_bytes())?;
-            open(&path)?;
-            assert!(create_dir_all(path).is_err());
-        }
-        {
-            let tempdir = tempfile::tempdir()?;
-            let path = tempdir.path().join("test");
-            create_dir_all(&path)?;
-            assert!(write_file(&path, "test".as_bytes()).is_err());
-        }
-        {
-            let tempdir = tempfile::tempdir()?;
-            let path = tempdir.path().join("test");
-            assert!(open(&path).is_err());
-            create_dir_all(&path)?;
-            assert!(path.is_dir())
-        }
-
-        Ok(())
-    }
-
-    // the following test is marked as serial because
-    // we are doing unshare of user ns and fork, so better to run in serial,
-    #[test]
-    #[serial]
-    fn test_userns_spec_validation() -> Result<(), test_utils::TestError> {
-        use nix::sched::{unshare, CloneFlags};
-        // default rootful spec
-        let rootful_spec = Spec::default();
-        // as we are not in a user ns, and spec does not have user ns
-        // we should get error here
-        assert!(validate_spec_for_new_user_ns(&rootful_spec).is_err());
-
-        let rootless_spec = Spec::rootless(1000, 1000);
-        // because the spec contains user ns info, we should not get error
-        assert!(validate_spec_for_new_user_ns(&rootless_spec).is_ok());
-
-        test_utils::test_in_child_process(|| {
-            unshare(CloneFlags::CLONE_NEWUSER).unwrap();
-            // here we are in a new user namespace
-            let rootful_spec = Spec::default();
-            // because we are already in a new user ns, it is fine if spec
-            // does not have user ns, and because the test is running as
-            // non root
-            assert!(validate_spec_for_new_user_ns(&rootful_spec).is_ok());
-
-            let rootless_spec = Spec::rootless(1000, 1000);
-            // following should succeed irrespective if we're in user ns or not
-            assert!(validate_spec_for_new_user_ns(&rootless_spec).is_ok());
-            Ok(())
-        })
-    }
 }

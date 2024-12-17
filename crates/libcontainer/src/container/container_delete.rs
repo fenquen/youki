@@ -46,7 +46,7 @@ impl Container {
                 // `runc` and `crun` allows deleting `created`. Therefore we
                 // decided to follow `runc` and `crun`.
                 self.do_kill(signal::Signal::SIGKILL, true)?;
-                self.set_status(ContainerStatus::Stopped).save()?;
+                self.set_status(ContainerStatus::Stopped).saveState2File()?;
             }
             ContainerStatus::Creating | ContainerStatus::Running | ContainerStatus::Paused => {
                 // Containers can't be deleted while in these status, unless
@@ -54,7 +54,7 @@ impl Container {
                 // processes associated with containers.
                 if force {
                     self.do_kill(signal::Signal::SIGKILL, true)?;
-                    self.set_status(ContainerStatus::Stopped).save()?;
+                    self.set_status(ContainerStatus::Stopped).saveState2File()?;
                 } else {
                     tracing::error!(
                         id = ?self.id(),
@@ -77,8 +77,8 @@ impl Container {
             }
         }
 
-        if self.root.exists() {
-            match YoukiConfig::load(&self.root) {
+        if self.rootPath.exists() {
+            match YoukiConfig::load(&self.rootPath) {
                 Ok(config) => {
                     tracing::debug!("config: {:?}", config);
 
@@ -87,13 +87,13 @@ impl Container {
                     // creating and removing cgroups section for more information on cgroups
                     let cmanager = libcgroups::common::create_cgroup_manager(
                         libcgroups::common::CgroupConfig {
-                            cgroup_path: config.cgroup_path.to_owned(),
+                            cgroup_path: config.cgroupPath.to_owned(),
                             systemd_cgroup: self.systemd(),
                             container_name: self.id().to_string(),
                         },
                     )?;
                     cmanager.remove().map_err(|err| {
-                        tracing::error!(cgroup_path = ?config.cgroup_path, "failed to remove cgroup due to: {err:?}");
+                        tracing::error!(cgroup_path = ?config.cgroupPath, "failed to remove cgroup due to: {err:?}");
                         err
                     })?;
 
@@ -118,9 +118,9 @@ impl Container {
             }
 
             // remove the directory storing container state
-            tracing::debug!("remove dir {:?}", self.root);
-            fs::remove_dir_all(&self.root).map_err(|err| {
-                tracing::error!(?err, path = ?self.root, "failed to remove container dir");
+            tracing::debug!("remove dir {:?}", self.rootPath);
+            fs::remove_dir_all(&self.rootPath).map_err(|err| {
+                tracing::error!(?err, path = ?self.rootPath, "failed to remove container dir");
                 LibcontainerError::OtherIO(err)
             })?;
         }

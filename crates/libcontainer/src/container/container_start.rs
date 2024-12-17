@@ -4,7 +4,7 @@ use super::{Container, ContainerStatus};
 use crate::config::YoukiConfig;
 use crate::error::LibcontainerError;
 use crate::hooks;
-use crate::notify_socket::{NotifySocket, NOTIFY_FILE};
+use crate::notify_socket::{NotifySocket, NOTIFY_SOCK_FILE_NAME};
 
 impl Container {
     /// Starts a previously created container
@@ -35,7 +35,7 @@ impl Container {
             return Err(LibcontainerError::IncorrectStatus);
         }
 
-        let config = YoukiConfig::load(&self.root).map_err(|err| {
+        let config = YoukiConfig::load(&self.rootPath).map_err(|err| {
             tracing::error!(
                 "failed to load runtime spec for container {}: {}",
                 self.id(),
@@ -57,10 +57,10 @@ impl Container {
             })?;
         }
 
-        let mut notify_socket = NotifySocket::new(self.root.join(NOTIFY_FILE));
+        let mut notify_socket = NotifySocket::new(self.rootPath.join(NOTIFY_SOCK_FILE_NAME));
         notify_socket.notify_container_start()?;
         self.set_status(ContainerStatus::Running)
-            .save()
+            .saveState2File()
             .map_err(|err| {
                 tracing::error!(id = ?self.id(), ?err, "failed to save state for container");
                 err
@@ -69,7 +69,7 @@ impl Container {
         // Run post start hooks. It runs after the container process is started.
         // It is called in the runtime namespace.
         if let Some(hooks) = config.hooks.as_ref() {
-            hooks::run_hooks(hooks.poststart().as_ref(), Some(self), Some(&self.root)).map_err(
+            hooks::run_hooks(hooks.poststart().as_ref(), Some(self), Some(&self.rootPath)).map_err(
                 |err| {
                     tracing::error!("failed to run post start hooks: {}", err);
                     err

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use nix::unistd::{self, close};
 
-pub const NOTIFY_FILE: &str = "notify.sock";
+pub const NOTIFY_SOCK_FILE_NAME: &str = "notify.sock";
 
 #[derive(Debug, thiserror::Error)]
 pub enum NotifyListenerError {

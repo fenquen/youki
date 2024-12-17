@@ -1,13 +1,5 @@
 # youki: A container runtime in Rust
 
-[![Discord](https://img.shields.io/discord/849943000770412575.svg?logo=discord)](https://discord.gg/zHnyXKSQFD)
-[![GitHub contributors](https://img.shields.io/github/contributors/containers/youki)](https://github.com/containers/youki/graphs/contributors)
-[![Github CI](https://github.com/containers/youki/actions/workflows/basic.yml/badge.svg?branch=main)](https://github.com/containers/youki/actions)
-[![codecov](https://codecov.io/gh/containers/youki/branch/main/graph/badge.svg)](https://codecov.io/gh/containers/youki)
-
-<p align="center">
-  <img src="docs/youki.png" width="450">
-</p>
 
 **youki** is an implementation of the [OCI runtime-spec](https://github.com/opencontainers/runtime-spec) in Rust, similar to [runc](https://github.com/opencontainers/runc).  
 Your ideas are welcome [here](https://github.com/containers/youki/issues/10).
@@ -281,7 +273,3 @@ just youki-dev # or youki-release
 Please refer to [our community page](https://containers.github.io/youki/community/introduction.html).
 
 Thanks to all the people who already contributed!
-
-<a href="https://github.com/containers/youki/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=containers/youki" />
-</a>

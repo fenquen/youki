@@ -19,7 +19,7 @@ pub fn list(_: List, root_path: PathBuf) -> Result<()> {
     // so we iterate through each and print the various info
     for container_dir in fs::read_dir(root_path)? {
         let container_dir = container_dir?.path();
-        let state_file = State::file_path(&container_dir);
+        let state_file = State::getStateFilePath(&container_dir);
         if !state_file.exists() {
             continue;
         }
